@@ -1,0 +1,1 @@
+Cette extension affiche "Hello Extensions" lorsque l'utilisateur clique sur l'icône de la barre d'outils de l'extension.
