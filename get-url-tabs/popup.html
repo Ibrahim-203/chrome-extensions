@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Get url active tab</title>
+    <link rel="stylesheet" href="bulma.min.css">
+    <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="container m-3">
+        <p class="has-text-centered">Bienvenu sur</p>
+        <h1 class="title is-family-code has-text-centered has-text-link m-2">Biblio Maker</h1>
+
+        <div class="field has-addons">
+            <div class="control">
+                <input class="input" type="text" id="nameGroup" placeholder="New groupe">
+            </div>
+            <div class="control">
+                <button class="button is-info" id="newGroup">
+                    Créer
+                </button>
+            </div>
+        </div>
+
+        <!-- show group of links -->
+        <div class="mt-4">
+            <h2 class="is-size-5 has-text-link">Mes groupes</h2>
+            <div id="groupList">
+        
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+  <!-- <div id="modal" class="modal">
+    <div class="modal-content">
+      <span id="closeModal">&times;</span>
+      <h3 id="modalTitle"></h3>
+      <ul id="linkList"></ul>
+    </div>
+  </div> -->
+
+    <script type="module" src="popup.js"></script>
+</body>
+
+</html>
