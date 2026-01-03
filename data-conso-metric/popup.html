@@ -1,14 +1,48 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-    <meta charset="UTF-8"/>
+  <meta charset="UTF-8" />
   <title>Data Live</title>
   <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="./assets/fontAwesome/all.min.css">
 </head>
+
 <body>
-  <h2>Données en Direct</h2>
-  <small>Mis à jour toutes les 2s</small>
-  <ul id="tabsList"></ul>
+  <div class="action-btn">
+    <i class="fas fa-broom" id="ClearData" title="Clear data"></i>
+    <i class="fa fa-download" id="exportBtn" title="Exporter les données"></i>
+    <i class="fa-solid fa-gear"></i>
+  </div>
+
+  </div>
+  <div class="header">
+    <img src="./assets/images/logo.png" alt="Logo" id="logo">
+    <h2>Trafic Metter</h2>
+  </div>
+  <div class="tab">
+    <i class="fa-solid fa-globe active" class="tabsList" data-target="direct-data"></i>
+    <i class="fa-solid fa-ranking-star" class="tabsList" data-target="statistic"></i>
+    <i class="fas fa-clock" class="tabsList" data-target="time-spend"></i>
+  </div>
+  <div id="status">Chargement...</div>
+  <div id="direct-data" class="tab-content active">
+    <ul id="tabsList"></ul>
+  </div>
+  <div id="statistic" class="tab-content">
+    <h3>Top 5 des sites gourmand</h3>
+    <ul id="topSitesList"></ul>
+  </div>
+  <div id="time-spend" class="tab-content">
+    <h3>Temps passé par site</h3>
+    <ul id="timeList"></ul>
+    
+  </div>
+
+  <footer>
+    <small>Coopyright 2025 | <span class="important">Tous droit réservé</span></small>
+  </footer>
   <script src="popup.js"></script>
 </body>
+
 </html>

@@ -1,6 +1,6 @@
 body { width: 320px; padding: 12px; font-family: Arial; }
 h2 { margin: 0 0 10px; font-size: 15px; }
-ul { list-style: none; padding: 0; max-height: 400px; overflow-y: auto; }
+ul { list-style: none; padding: 0}
 li { 
   border: 1px solid #ddd; 
   border-radius: 6px; 
@@ -22,3 +22,79 @@ button {
   margin-top: 10px;
 }
 button:hover { background: #1557b0; }
+.important {
+  font-weight: bold;
+}
+/* Action buttons */
+.action-btn {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.action-btn i{
+  cursor: pointer;
+  font-size: 16px;
+  color: #635d5d;
+  transition: color 0.3s;
+}
+.action-btn i:hover {
+  color: #05000e;
+}
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+.header #logo {
+  width: 50px;
+  height: 50px;
+}
+
+/* Tab */
+.tab {
+  display: flex;
+  gap: 5px;
+  overflow: hidden;
+  border-bottom: 1px solid #ccc;
+  margin-bottom: 5px;
+}
+.tab i {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.tab i:hover {
+  background-color: #f1f1f1;
+}
+.tab i.active {
+  border-bottom: 2px solid #1a73e8;
+  font-weight: bold;
+  color: #1a73e8;
+}
+
+.tab-content {
+  display: none;
+  padding: 10px;
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.time { font-weight: bold; color: #d93025; }
+
+footer {
+  margin-top: 15px;
+  text-align: center;
+  font-size: 10px;
+  color: #666;
+}
