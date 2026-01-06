@@ -54,14 +54,14 @@ async function loadData() {
     tabs.forEach(tab => {
       const session = sessions.find(s => s.url === tab.url);  // Associe à la session
       const sizeText = session ? formatSize(session.totalSize) : 'Non mesuré';
-      const timeMs = timeByUrl[tab.url] || 0;
+      const timeMs = session.totalTime || 0;
       const timeText = formatTime(timeMs);
 
       const li = document.createElement('li');
       li.innerHTML = `
         <strong>${tab.title.substring(0, 30)}...</strong><br>
         <small>${tab.url.substring(0, 50)}...</small><br>
-        <b>${sizeText}</b> (live)
+        <b>${sizeText} | ${timeText}</b> (live)
       `;
       tabsList.appendChild(li);
     });
@@ -88,15 +88,15 @@ async function loadData() {
       topSitesList.appendChild(li);
     });
 
-    const byDomain = {};
-    Object.keys(timeByUrl).forEach(url => {
-      try {
-        const domain = new URL(url).hostname;
-        byDomain[domain] = (byDomain[domain] || 0) + timeByUrl[url];
-      } catch (e) {
-        // URL invalide (chrome://, etc.) → ignorée
-      }
-    });
+const byDomain = {};
+
+// Parcourt toutes les sessions pour agréger le temps par domaine
+sessions.forEach(session => {
+  const domain = session.domain || (session.url ? new URL(session.url).hostname : 'inconnu');
+
+  // Ajoute le temps de cette session au domaine
+  byDomain[domain] = (byDomain[domain] || 0) + (session.totalTime || 0);
+});
 
     // Tri du plus grand au plus petit
     const sortedTime = Object.entries(byDomain)
@@ -153,12 +153,22 @@ function startLiveUpdate() {
   interval = setInterval(loadData, 2000);
 }
 
-// Export (historique sessions)
+// Export JSON (sessions + deviceInfo)
 exportBtn.addEventListener('click', async () => {
-  const storage = await chrome.storage.local.get('sessions');
-  const blob = new Blob([JSON.stringify(storage.sessions || [], null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename: 'sessions-data.json' });
+  try {
+    const storage = await chrome.storage.local.get(['sessions', 'deviceInfo']);
+    const data = {
+      deviceInfo: storage.deviceInfo || {},
+      sessions: storage.sessions || []
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    chrome.downloads.download({ url, filename: 'data-collector.json', saveAs: true });
+  } catch (error) {
+    console.error("Erreur export :", error);
+    status.textContent = "Erreur export : " + error.message;
+  }
 });
 
 // Démarrage

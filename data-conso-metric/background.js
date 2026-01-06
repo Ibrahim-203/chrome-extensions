@@ -102,45 +102,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "addTrafficDelta") {
     const url = message.url;
     const delta = message.delta;
+    const today = new Date().toISOString().split('T')[0];
+    const sessionKey = `${url}|${today}`;
 
     chrome.storage.local.get('sessions', (result) => {
       let sessions = result.sessions || [];
-      let session = sessions.find(s => s.url === url);
+      let session = sessions.find(s => s.key === sessionKey);
 
       if (!session) {
         session = {
+          key: sessionKey,
           url: url,
           domain: new URL(url).hostname,
+          date: today,
           totalSize: 0,
+          totalTime: 0,
           timestamps: []
         };
         sessions.push(session);
       }
 
       session.totalSize += delta;
-      session.timestamps.push(Date.now());
-
-      chrome.storage.local.set({ sessions });
-    });
-  }else if (message.action === "updateVideoQuality") {
-    const url = message.url;
-    const quality = message.quality;
-
-    chrome.storage.local.get('sessions', (result) => {
-      let sessions = result.sessions || [];
-      let session = sessions.find(s => s.url === url);
-
-      if (!session) {
-        session = {
-          url: url,
-          domain: new URL(url).hostname,
-          totalSize: 0,
-          timestamps: []
-        };
-        sessions.push(session);
-      }
-
-      session.videoQuality = quality;  // ← Nouvelle clé
 
       chrome.storage.local.set({ sessions });
     });
@@ -216,6 +198,116 @@ chrome.windows.onRemoved.addListener((windowId) => {
     stopAndSaveTime();
   }
 });
+
+// background.js – Récupération des infos appareil + géolocalisation (approche mixte : automatique au premier lancement, fallback manuel via message)
+
+// Fonction pour détecter le type d'appareil
+function detectDeviceType() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
+  if (/mobile|iphone|ipod|android|blackberry|opera mini|iemobile/i.test(ua)) return 'mobile';
+  return 'desktop';
+}
+
+// Récupère ou crée les infos appareil + demande géolocalisation automatique au premier lancement
+function initializeDeviceInfo() {
+  chrome.storage.local.get('deviceInfo', (result) => {
+    let info = result.deviceInfo || {};
+
+    // Infos de base (toujours disponibles)
+    info.deviceType = detectDeviceType();
+    info.cpuCores = navigator.hardwareConcurrency || 'Inconnu';
+    info.memoryGB = navigator.deviceMemory || 'Inconnu';
+    // info.screen = `${screen.width}x${screen.height} (ratio ${window.devicePixelRatio || 1})`;
+    info.language = navigator.language || 'Inconnu';
+    info.userAgent = navigator.userAgent;
+    info.updatedAt = Date.now();
+    chrome.storage.local.set({ deviceInfo: info });
+
+    // Demande géolocalisation automatique si pas encore fait ou refusé
+    // if (!info.geoTimestamp && !info.geoRefused) {
+    //   requestGeolocation(info);
+    // } else {
+    //   chrome.storage.local.set({ deviceInfo: info });
+    // }
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "saveGeolocation") {
+    chrome.storage.local.get('deviceInfo', (result) => {
+      const info = result.deviceInfo || {};
+      info.latitude = message.latitude;
+      info.longitude = message.longitude;
+      info.city = message.city;
+      info.country = message.country;
+      info.geoTimestamp = Date.now();
+      if (message.refused) info.geoRefused = true;
+
+      chrome.storage.local.set({ deviceInfo: info });
+      console.log("Géolocalisation sauvegardée :", info.city, info.country);
+    });
+  }
+});
+
+// Fonction pour demander la géolocalisation
+function requestGeolocation(info) {
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude.toFixed(6);
+      const lon = position.coords.longitude.toFixed(6);
+
+      // Reverse geocoding gratuit avec OpenStreetMap Nominatim
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`)
+        .then(r => r.json())
+        .then(data => {
+          info.latitude = lat;
+          info.longitude = lon;
+          info.city = data.address?.city || data.address?.town || data.address?.village || 'Inconnue';
+          info.country = data.address?.country || 'Inconnu';
+          info.geoTimestamp = Date.now();
+          chrome.storage.local.set({ deviceInfo: info });
+          console.log("Géolocalisation automatique réussie");
+        })
+        .catch(() => {
+          info.latitude = lat;
+          info.longitude = lon;
+          info.city = 'Inconnue';
+          info.country = 'Inconnu';
+          info.geoTimestamp = Date.now();
+          chrome.storage.local.set({ deviceInfo: info });
+        });
+    },
+    (error) => {
+      console.log("Géolocalisation automatique refusée ou échouée :", error.message);
+      info.geoRefused = true;
+      info.geoTimestamp = Date.now();
+      chrome.storage.local.set({ deviceInfo: info });
+    },
+    { timeout: 15000, maximumAge: 3600000 } // 15s timeout, cache 1h
+  );
+}
+
+// Lancement automatique au premier démarrage/installation
+chrome.runtime.onInstalled.addListener(initializeDeviceInfo);
+chrome.runtime.onStartup.addListener(initializeDeviceInfo);
+
+// Fallback manuel : écoute un message pour redemander (ex: depuis un bouton ailleurs)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "requestGeoManual") {
+    chrome.storage.local.get('deviceInfo', (result) => {
+      const info = result.deviceInfo || {};
+      delete info.geoRefused; // On oublie le refus précédent
+      chrome.storage.local.set({ deviceInfo: info }, () => {
+        requestGeolocation(info);
+        sendResponse({ status: "Demande relancée" });
+      });
+    });
+    return true; // Pour réponse asynchrone
+  }
+});
+
+
 // Fonctions principale de gestion du chrono
 
 
@@ -241,22 +333,69 @@ async function startChrono(url) {
 async function stopAndSaveTime() {
   if (!startTime || !currentUrl) return;
 
-  const elapsed = Date.now() - startTime;  // Temps écoulé en millisecondes
+  const elapsed = Date.now() - startTime;
   const url = currentUrl;
 
-  // Récupère les temps déjà sauvegardés
-  const result = await chrome.storage.local.get('timeByUrl');
-  const timeByUrl = result.timeByUrl || {};
+  // Date du jour au format YYYY-MM-DD (basée sur le premier timestamp de la session)
+  const today = new Date().toISOString().split('T')[0]; // "2026-01-04"
 
-  // Ajoute le temps écoulé à cette URL
-  timeByUrl[url] = (timeByUrl[url] || 0) + elapsed;
+  // Clé unique : URL + date
+  const sessionKey = `${url}|${today}`;
+
+  // Récupère les sessions
+  const result = await chrome.storage.local.get('sessions');
+  let sessions = result.sessions || [];
+
+  // Cherche une session avec la même clé
+  let session = sessions.find(s => s.key === sessionKey);
+
+  if (!session) {
+    // Crée une nouvelle session pour ce jour
+    session = {
+      key: sessionKey,                    // Clé unique
+      url: url,
+      domain: new URL(url).hostname,
+      date: today,                        // ← Nouvelle colonne date
+      totalSize: 0,
+      totalTime: 0,
+      timestamps: []
+    };
+    sessions.push(session);
+  }
+
+  // Cumule trafic et temps pour ce jour
+  session.totalTime += elapsed;
+  session.timestamps.push(Date.now());
+
+  // (Le trafic dynamique est déjà ajouté via addTrafficDelta avec la même logique si tu l'utilises)
 
   // Sauvegarde
-  await chrome.storage.local.set({ timeByUrl });
+  await chrome.storage.local.set({ sessions });
 
-  console.log(`⏱ Arrêt chrono pour ${url} → +${Math.round(elapsed / 1000)} secondes`);
+  console.log(`⏱ Session ${today} pour ${url} → temps +${Math.round(elapsed / 1000)}s`);
 
-  // Reset pour le prochain onglet
+  // Reset
   startTime = null;
   currentUrl = null;
 }
+
+// analyse header
+
+// chrome.webRequest.onCompleted.addListener(
+//   details => {
+//       console.log(details);
+//   },
+//   { urls: ["<all_urls>"] },
+//   ["responseHeaders"]
+// );
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url){
+    console.log(
+      {
+        url : tab.url,
+        hostname : new URL(tab.url).hostname,
+      }
+    )
+  }
+})

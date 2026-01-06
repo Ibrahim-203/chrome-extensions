@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Data Conso meter",
   "version": "1.0",
-  "permissions": ["storage", "tabs", "activeTab", "downloads"],
+  "permissions": ["storage", "tabs", "activeTab", "downloads", "geolocation", "webRequest"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },

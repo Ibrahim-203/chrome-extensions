@@ -90,9 +90,18 @@ function detectVideoResolution() {
   }
 }
 
+function safeSendMessage(message) {
+  if (chrome.runtime?.id) {  // Vérifie que le runtime est encore valide
+    chrome.runtime.sendMessage(message).catch(() => {
+      // Silencieux : l'erreur est ignorée si contexte invalide
+      console.log("Message ignoré : contexte invalide");
+    });
+  }
+}
+
 setInterval(() => {
   if (totalDelta > 0) {
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       action: "addTrafficDelta",
       delta: totalDelta,
       url: window.location.href
@@ -102,35 +111,6 @@ setInterval(() => {
   }
 }, 8000); // Toutes les 8 secondes
 setInterval(detectVideoResolution, 10000);
-
-// === 3. Envoie les données au background ===
-// Ancienne version (données identifier par onglet)
-// function sendUpdate() {
-//   chrome.runtime.sendMessage({
-//     action: 'updateTabData',
-//     data: {
-//       url: window.location.href,
-//       title: document.title,
-//       size: totalSize,
-//       timestamp: Date.now()
-//     }
-//   });
-// }
-
-// Envoie (avec URL actuelle pour détection de changements)
-// function sendUpdate() {
-//   chrome.runtime.sendMessage({
-//     action: 'updateSessionData',
-//     data: {
-//       url: window.location.href,
-//       title: document.title,
-//       sizeDelta: totalSize, // Delta pour cumuler
-//       timestamp: Date.now()
-//     }
-//   });
-//   totalSize = 0; // Reset delta après envoi (pour ne cumuler que les nouveaux)
-// }
-
 
 // content.js – Détection de lecture audio/vidéo active
 
@@ -173,12 +153,66 @@ function startPlaybackDetection() {
   }, 5000); // Toutes les 5 secondes
 }
 
+// ----- Geolocalisation-------------
+
+//  Vérifie si on a déjà demandé la géolocalisation
+chrome.storage.local.get('deviceInfo', (result) => {
+  const info = result.deviceInfo || {};
+
+  // Si déjà demandé (succès ou refus) → on ne fait rien
+  if (info.geoTimestamp || info.geoRefused) {
+    return;
+  }
+
+  // Sinon, on demande automatiquement
+  console.log("Première page chargée → demande automatique de géolocalisation");
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude.toFixed(6);
+      const lon = position.coords.longitude.toFixed(6);
+
+      // Reverse geocoding avec Nominatim (gratuit)
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`)
+        .then(r => r.json())
+        .then(data => {
+          const city = data.address?.city || data.address?.town || data.address?.village || 'Inconnue';
+          const country = data.address?.country || 'Inconnu';
+
+          sendGeoToBackground(lat, lon, city, country, false);
+        })
+        .catch(() => {
+          sendGeoToBackground(lat, lon, 'Inconnue', 'Inconnu', false);
+        });
+    },
+    (error) => {
+      console.log("Géolocalisation refusée automatiquement :", error.message);
+      sendGeoToBackground(null, null, 'Refusée', 'Refusée', true);
+    },
+    { timeout: 15000, maximumAge: 3600000 }
+  );
+});
+
+// Fonction pour envoyer au background
+function sendGeoToBackground(lat, lon, city, country, refused) {
+  chrome.runtime.sendMessage({
+    action: "saveGeolocation",
+    latitude: lat,
+    longitude: lon,
+    city: city,
+    country: country,
+    refused: refused
+  });
+}
+
+// --------End Geolocalisation ----------
+
 // === Démarrage ===
 window.addEventListener('load', () => {
   setTimeout(detectVideoResolution, 8000);
   measureInitial();
   startObserver();
-  startPlaybackDetection();
+  // startPlaybackDetection();
 });
 
 // Nettoyage si page fermée
@@ -189,10 +223,10 @@ window.addEventListener('unload', () => {
     clearInterval(playbackCheckInterval);
   }
   // Informe le background que la lecture s'arrête
-  chrome.runtime.sendMessage({
-    action: "playbackStateChanged",
-    playing: false
-  });
+  // chrome.runtime.sendMessage({
+  //   action: "playbackStateChanged",
+  //   playing: false
+  // });
 // Envoi final si reste du trafic dynamique
   if (totalDelta > 0) {
     chrome.runtime.sendMessage({
