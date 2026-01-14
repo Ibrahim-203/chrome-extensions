@@ -2,7 +2,7 @@
 //   if (request.action === 'saveTabData') {
 //     // ✅ sender.tab.id = l'ID de l'onglet AUTOMATIQUE
 //     const tabId = sender.tab?.id;
-    
+
 //     if (!tabId) {
 //       sendResponse({ status: 'no-tab-id' });
 //       return true;
@@ -12,7 +12,7 @@
 //     chrome.storage.local.set({
 //       [key]: request.data
 //     });
-    
+
 //     console.log(`✅ Données sauvegardées pour onglet ${tabId}: ${request.data.title}`);
 //     sendResponse({ status: 'saved' });
 //   }
@@ -99,33 +99,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Réception trafic dynamique du content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "addTrafficDelta") {
+  if (message.action === "updateVideoQuality") {
     const url = message.url;
-    const delta = message.delta;
-    const today = new Date().toISOString().split('T')[0];
-    const sessionKey = `${url}|${today}`;
+    const quality = message.quality;
 
     chrome.storage.local.get('sessions', (result) => {
       let sessions = result.sessions || [];
-      let session = sessions.find(s => s.key === sessionKey);
+      let session = sessions.find(s => s.url === url);
 
       if (!session) {
         session = {
-          key: sessionKey,
           url: url,
           domain: new URL(url).hostname,
-          date: today,
           totalSize: 0,
-          totalTime: 0,
           timestamps: []
         };
         sessions.push(session);
       }
 
-      session.totalSize += delta;
+      session.videoQuality = quality;  // ← Nouvelle clé
 
-      chrome.storage.local.set({ sessions });
-    });
+      chrome.storage.local.set({ sessions })
+        ;
+    })
   }
 });
 
@@ -379,23 +375,96 @@ async function stopAndSaveTime() {
   currentUrl = null;
 }
 
-// analyse header
 
-// chrome.webRequest.onCompleted.addListener(
-//   details => {
-//       console.log(details);
-//   },
-//   { urls: ["<all_urls>"] },
-//   ["responseHeaders"]
-// );
+// ===================================
+// webRequest : Trafic précis avec URL principale de l'onglet
+// ===================================
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url){
-    console.log(
-      {
-        url : tab.url,
-        hostname : new URL(tab.url).hostname,
+chrome.webRequest.onCompleted.addListener(
+  async (details) => {
+    // Ignore les requêtes internes Chrome
+    if (details.url.startsWith('chrome-extension://') ||
+      details.url.startsWith('chrome://') ||
+      details.url.startsWith('about:')) {
+      return;
+    }
+
+    // Taille de la réponse
+    let size = 0;
+    if (details.responseHeaders) {
+      const header = details.responseHeaders.find(h => h.name.toLowerCase() === 'content-length');
+      if (header && header.value) {
+        size = parseInt(header.value, 10);
       }
-    )
-  }
-})
+    }
+
+    // Fallback pour streaming (transfer-encoding: chunked)
+    if (size === 0 && details.method === 'GET') {
+      size = 50000; // Estimation conservatrice
+    }
+
+    if (size === 0) return;
+
+    let tabUrl = 'unknown';
+    try {
+      const tab = await chrome.tabs.get(details.tabId);
+      if (tab && tab.url) {
+        tabUrl = tab.url;
+      }
+    } catch (e) {
+      return; // Onglet fermé ou inaccessible
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const sessionKey = `${tabUrl}|${today}`;
+    let requestType = ''
+
+    if (details.type === 'xmlhttprequest') requestType = 'xhr';
+    else if (details.type === 'fetch') requestType = 'fetch';
+    else if (details.type === 'media') requestType = 'media';
+    else if (details.type === 'image') requestType = 'image';
+    else if (details.type === 'script') requestType = 'script';
+    else if (details.type === 'websocket') requestType = 'webSocket';
+
+    // Cumul dans sessions
+    chrome.storage.local.get('sessions', (result) => {
+      let sessions = result.sessions || [];
+      let session = sessions.find(s => s.key === sessionKey);
+
+      if (!session) {
+        session = {
+          key: sessionKey,
+          url: tabUrl,
+          domain: new URL(tabUrl).hostname,
+          date: today,
+          totalSize: 0,
+          totalTime: 0,
+          xhrRequests: 0,
+          mediaRequests: 0,
+          imagesRequests : 0,
+          webSocketRequests : 0,
+          fetchRequests : 0,
+          scriptRequests : 0,
+          timestamps: []
+        };
+        sessions.push(session);
+      }
+
+      switch (requestType) {
+        case 'xhr': session.xhrRequests++; break;
+        case 'fetch': session.fetchRequests++; break;
+        case 'media': session.mediaRequests++; break;
+        case 'image': session.imageRequests++; break;
+        case 'script': session.scriptRequests++; break;
+        case 'webSocket': session.webSocketRequests++; break;
+      }
+
+      session.totalSize += size;
+      session.timestamps.push(Date.now());
+
+      chrome.storage.local.set({ sessions });
+    });
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);

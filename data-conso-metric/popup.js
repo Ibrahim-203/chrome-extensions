@@ -42,17 +42,19 @@ async function loadData() {
   try {
     // 1. Récupère l'historique des sessions (global, persistant)
     const storage = await chrome.storage.local.get('sessions');
-    const result = await chrome.storage.local.get('timeByUrl');
-    const timeByUrl = result.timeByUrl || {};
     const sessions = storage.sessions || [];
+    const today = new Date().toISOString().split('T')[0];
+    
 
     // 2. Vue 1 : Onglets ouverts (live)
     // - Liste les onglets actuels
     // - Pour chaque, trouve la session correspondante à son URL actuelle
     const tabs = await chrome.tabs.query({});
     tabsList.innerHTML = '';
-    tabs.forEach(tab => {
-      const session = sessions.find(s => s.url === tab.url);  // Associe à la session
+    if (tabs.length > 0){
+      tabs.forEach(tab => {
+      const sessionsKey = `${tab.url}|${today}`
+      const session = sessions.find(s => s.key === sessionsKey);  // Associe à la session
       const sizeText = session ? formatSize(session.totalSize) : 'Non mesuré';
       const timeMs = session.totalTime || 0;
       const timeText = formatTime(timeMs);
@@ -65,6 +67,10 @@ async function loadData() {
       `;
       tabsList.appendChild(li);
     });
+    }else{
+      tabsList.innerHTML = '<li>Aucun onglet ouvert</li>';
+    }
+    
 
     // 3. Vue 2 : Top sites historiques (agrégé par domaine)
     // - Groupe toutes les sessions par domaine
@@ -118,7 +124,7 @@ sessions.forEach(session => {
 
     statusDiv.textContent = "Données mises à jour";
   } catch (error) {
-    statusDiv.textContent = "Erreur : " + error.message;
+    statusDiv.textContent = "Erreur ato : " + error.message;
   }
 }
 
