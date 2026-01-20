@@ -1,32 +1,3 @@
-// chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-//   if (request.action === 'saveTabData') {
-//     // ✅ sender.tab.id = l'ID de l'onglet AUTOMATIQUE
-//     const tabId = sender.tab?.id;
-
-//     if (!tabId) {
-//       sendResponse({ status: 'no-tab-id' });
-//       return true;
-//     }
-
-//     const key = `tabData_${tabId}`;
-//     chrome.storage.local.set({
-//       [key]: request.data
-//     });
-
-//     console.log(`✅ Données sauvegardées pour onglet ${tabId}: ${request.data.title}`);
-//     sendResponse({ status: 'saved' });
-//   }
-//   return true;
-// });
-
-// chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-//   if (request.action === 'updateTabData' && sender.tab?.id) {
-//     const key = `tabData_${sender.tab.id}`;
-//     chrome.storage.local.set({ [key]: request.data });
-//     sendResponse({ status: 'updated' });
-//   }
-//   return true;
-// });
 
 let sessions = []; // Cache en mémoire pour rapidité
 // Variables pour débounce anti-faux événements
@@ -41,6 +12,44 @@ let isPlaybackActive = false; // Variable pour savoir si une lecture est active 
 chrome.storage.local.get('sessions', (result) => {
   sessions = result.sessions || [];
 });
+
+// ====================== get emission factors from electricityMap API  ================================
+
+// Facteur par défaut si API échoue (Madagascar approx)
+const DEFAULT_ENERGY_INTENSITY = 0.07; // kWh/GB ( sustainablewebdesign.org - 2025 )
+const DEFAULT_GRID_INTENSITY = 339; // gCO₂e/kWh (Madagascar last 5 years average - electricitymap.org (2026) )
+
+// Récupère les facteurs CO2 via API (une fois par jour)
+async function updateCo2Factors() {
+  chrome.storage.local.get('deviceInfo', (result) => {
+    const info = result.deviceInfo || {};
+    if (info.co2FactorsUpdated && (Date.now() - info.co2FactorsUpdated < 24 * 60 * 60 * 1000)) {
+      console.log("Facteurs CO2 déjà à jour");
+      return;
+    }
+
+    fetch('https://api.electricitymaps.com/v3/carbon-intensity/latest?zone=MG', {
+      headers: { 'auth-token': 'Sh3JzpIlKgWZv7zbqjua' } // Remplace par ta clé
+    })
+      .then(r => r.json())
+      .then(data => {
+        info.gridCarbonIntensity = data.data.carbonIntensity || DEFAULT_GRID_INTENSITY;
+        info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
+        info.co2FactorPerGB = (info.energyIntensity * info.gridCarbonIntensity).toFixed(2);
+        info.co2FactorsUpdated = Date.now();
+        chrome.storage.local.set({ deviceInfo: info });
+        console.log("Facteurs CO2 mis à jour via API :", info.co2FactorPerGB, "gCO₂/Go");
+      })
+      .catch(() => {
+        info.gridCarbonIntensity = DEFAULT_GRID_INTENSITY;
+        info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
+        info.co2FactorPerGB = (info.energyIntensity * info.gridCarbonIntensity).toFixed(2);
+        info.co2FactorsUpdated = Date.now();
+        chrome.storage.local.set({ deviceInfo: info });
+        console.log("Facteurs CO2 fallback :", info.co2FactorPerGB, "gCO₂/Go");
+      });
+  });
+}
 
 // ======================  Réception des messages du content script  ================================
 
@@ -67,35 +76,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-//   if (request.action === 'updateSessionData' && sender.tab?.id) {
-//     const tabId = sender.tab.id;
-//     const currentUrl = request.data.url;
 
-//     // Trouve ou crée la session pour cette URL
-//     let session = sessions.find(s => s.url === currentUrl);
-//     if (!session) {
-//       session = {
-//         url: currentUrl,
-//         domain: new URL(currentUrl).hostname, // Ex: 'youtube.com'
-//         totalSize: 0,
-//         totalTime: 0, // Pour futur temps passé
-//         timestamps: [] // Pour plusieurs visites
-//       };
-//       sessions.push(session);
-//     }
-
-//     // Cumule le delta (nouvelle data)
-//     session.totalSize += request.data.sizeDelta;
-//     session.timestamps.push(request.data.timestamp);
-
-//     // Sauvegarde global
-//     chrome.storage.local.set({ sessions });
-
-//     sendResponse({ status: 'updated' });
-//   }
-//   return true;
-// });
 
 // Réception trafic dynamique du content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -116,6 +97,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
         sessions.push(session);
       }
+
 
       session.videoQuality = quality;  // ← Nouvelle clé
 
@@ -261,6 +243,7 @@ function requestGeolocation(info) {
           info.longitude = lon;
           info.city = data.address?.city || data.address?.town || data.address?.village || 'Inconnue';
           info.country = data.address?.country || 'Inconnu';
+          info.country_code = data.address?.country_code || 'Inconnu';
           info.geoTimestamp = Date.now();
           chrome.storage.local.set({ deviceInfo: info });
           console.log("Géolocalisation automatique réussie");
@@ -441,11 +424,13 @@ chrome.webRequest.onCompleted.addListener(
           totalTime: 0,
           xhrRequests: 0,
           mediaRequests: 0,
-          imagesRequests : 0,
-          webSocketRequests : 0,
-          fetchRequests : 0,
-          scriptRequests : 0,
-          timestamps: []
+          imagesRequests: 0,
+          webSocketRequests: 0,
+          fetchRequests: 0,
+          scriptRequests: 0,
+          timestamps: [],
+          co2Grams: 0,
+          co2Kg: "0.00"
         };
         sessions.push(session);
       }
@@ -462,9 +447,26 @@ chrome.webRequest.onCompleted.addListener(
       session.totalSize += size;
       session.timestamps.push(Date.now());
 
-      chrome.storage.local.set({ sessions });
+      chrome.storage.local.get('deviceInfo', (result) => {
+        const info = result.deviceInfo || {};
+        const co2Factor = parseFloat(info.co2FactorPerGB) || (DEFAULT_ENERGY_INTENSITY * DEFAULT_GRID_INTENSITY);
+        
+        session.co2Grams = session.totalSize / 1_000_000_000 * co2Factor;
+        session.co2Kg = (session.co2Grams / 1000).toFixed(3);
+
+
+        // Option : équivalence arbres/voitures (pour affichage)
+        session.equivTrees = (session.co2Grams / 22000).toFixed(2); // gCO₂ par arbre par jour
+        session.equivCarKm = (session.co2Grams / 180).toFixed(2); // gCO₂/km voiture moyenne
+
+        chrome.storage.local.set({ sessions });
+      });
     });
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders"]
 );
+
+// Appel automatique
+chrome.runtime.onStartup.addListener(updateCo2Factors);
+chrome.runtime.onInstalled.addListener(updateCo2Factors);

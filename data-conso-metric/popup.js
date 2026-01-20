@@ -56,6 +56,7 @@ async function loadData() {
       const sessionsKey = `${tab.url}|${today}`
       const session = sessions.find(s => s.key === sessionsKey);  // Associe à la session
       const sizeText = session ? formatSize(session.totalSize) : 'Non mesuré';
+      const co2Text = session ? `${session.co2Kg} kg CO₂e` : '0 kg CO₂e';
       const timeMs = session.totalTime || 0;
       const timeText = formatTime(timeMs);
 
@@ -63,7 +64,7 @@ async function loadData() {
       li.innerHTML = `
         <strong>${tab.title.substring(0, 30)}...</strong><br>
         <small>${tab.url.substring(0, 50)}...</small><br>
-        <b>${sizeText} | ${timeText}</b> (live)
+        <b>${sizeText} | ${timeText} | ${co2Text}</b> (live)
       `;
       tabsList.appendChild(li);
     });
