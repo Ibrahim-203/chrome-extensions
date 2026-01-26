@@ -1,4 +1,21 @@
 
+// Au tout début de background.js
+importScripts('./assets/firebase/firebase.app.compat.js')
+importScripts('./assets/firebase/firebase.database.compat.js')
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDol1NoTuwb849gjARAgmisEWK-u1Pli3g",
+  authDomain: "data-collector-mvp.firebaseapp.com",
+  projectId: "data-collector-mvp",
+  storageBucket: "data-collector-mvp.firebasestorage.app",
+  messagingSenderId: "13360282567",
+  appId: "1:13360282567:web:4f678a5ace717a6ab0f7e2",
+  measurementId: "G-6NZL88N3Y3"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
 let sessions = []; // Cache en mémoire pour rapidité
 // Variables pour débounce anti-faux événements
 
@@ -13,41 +30,76 @@ chrome.storage.local.get('sessions', (result) => {
   sessions = result.sessions || [];
 });
 
-// ====================== get emission factors from electricityMap API  ================================
+// ====================== get emission factors from ember API  ================================
 
-// Facteur par défaut si API échoue (Madagascar approx)
-const DEFAULT_ENERGY_INTENSITY = 0.07; // kWh/GB ( sustainablewebdesign.org - 2025 )
-const DEFAULT_GRID_INTENSITY = 339; // gCO₂e/kWh (Madagascar last 5 years average - electricitymap.org (2026) )
+const EMBER_API_BASE = "https://api.ember-energy.org/v1";
+const DEFAULT_ENERGY_INTENSITY = 0.06; // kWh/GB (moyenne mondiale 2025-2026)
+const API_KEY = '7c797af9-103b-3f32-acc1-941be6ad37f3'
 
-// Récupère les facteurs CO2 via API (une fois par jour)
-async function updateCo2Factors() {
-  chrome.storage.local.get('deviceInfo', (result) => {
-    const info = result.deviceInfo || {};
-    if (info.co2FactorsUpdated && (Date.now() - info.co2FactorsUpdated < 24 * 60 * 60 * 1000)) {
-      console.log("Facteurs CO2 déjà à jour");
-      return;
+// Fonction pour récupérer le facteur carbone Ember par pays
+async function fetchEmberCarbonIntensity(countryCode) {
+  // countryCode = "MDG" pour Madagascar, "FR" pour France, etc.
+  // Ember utilise des codes ISO 3166-1 alpha-2
+  try {
+    console.log(`[Ember API] Appel pour pays ${countryCode}`);
+
+    const response = await fetch(`${EMBER_API_BASE}/carbon-intensity/yearly?entity_code=MDG&api_key=${API_KEY}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ember API status: ${response.status}`);
     }
 
-    fetch('https://api.electricitymaps.com/v3/carbon-intensity/latest?zone=MG', {
-      headers: { 'auth-token': 'Sh3JzpIlKgWZv7zbqjua' } // Remplace par ta clé
-    })
-      .then(r => r.json())
-      .then(data => {
-        info.gridCarbonIntensity = data.data.carbonIntensity || DEFAULT_GRID_INTENSITY;
-        info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
-        info.co2FactorPerGB = (info.energyIntensity * info.gridCarbonIntensity).toFixed(2);
-        info.co2FactorsUpdated = Date.now();
-        chrome.storage.local.set({ deviceInfo: info });
-        console.log("Facteurs CO2 mis à jour via API :", info.co2FactorPerGB, "gCO₂/Go");
-      })
-      .catch(() => {
-        info.gridCarbonIntensity = DEFAULT_GRID_INTENSITY;
-        info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
-        info.co2FactorPerGB = (info.energyIntensity * info.gridCarbonIntensity).toFixed(2);
-        info.co2FactorsUpdated = Date.now();
-        chrome.storage.local.set({ deviceInfo: info });
-        console.log("Facteurs CO2 fallback :", info.co2FactorPerGB, "gCO₂/Go");
-      });
+    const data = await response.json();
+    console.log("[Ember API] Réponse reçue :", data);
+
+    // Ember retourne souvent l'intensité carbone annuelle/mensuelle
+    // On prend la dernière valeur disponible (mensuelle ou annuelle)
+    const latest = data.data?.[data.data.length - 1];
+    const intensity = latest?.emissions_intensity_gco2_per_kwh || null;
+
+    if (intensity) {
+      return intensity; // gCO₂/kWh
+    } else {
+      throw new Error("Aucune intensité carbone trouvée");
+    }
+  } catch (error) {
+    console.error("[Ember API] Erreur :", error);
+    return null;
+  }
+}
+
+async function updateEmberCo2Factor() {
+  chrome.storage.local.get('deviceInfo', async (result) => {
+    const info = result.deviceInfo || {};
+
+    // On récupère le code pays depuis la géolocalisation (ou fallback)
+    let countryCode = 'MDG'; // Fallback Madagascar
+
+    // Appel Ember
+    const gridIntensity = await fetchEmberCarbonIntensity(countryCode);
+
+    if (gridIntensity) {
+      info.gridCarbonIntensity = gridIntensity;
+      info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
+      info.co2FactorPerGB = (DEFAULT_ENERGY_INTENSITY * gridIntensity).toFixed(2);
+      info.co2Source = "Ember";
+      info.co2UpdatedAt = Date.now();
+    } else {
+      // Fallback
+      info.gridCarbonIntensity = 600;
+      info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
+      info.co2FactorPerGB = (DEFAULT_ENERGY_INTENSITY * 600).toFixed(2);
+      info.co2Source = "Fallback";
+      info.co2UpdatedAt = Date.now();
+    }
+
+    chrome.storage.local.set({ deviceInfo: info });
+    console.log("[CO2] Facteur Ember mis à jour :", info.co2FactorPerGB, "gCO₂/Go");
   });
 }
 
@@ -460,6 +512,9 @@ chrome.webRequest.onCompleted.addListener(
         session.equivCarKm = (session.co2Grams / 180).toFixed(2); // gCO₂/km voiture moyenne
 
         chrome.storage.local.set({ sessions });
+        db.ref('users/' + 'device_' + chrome.runtime.id + '/sessions').set(sessions)
+  .then(() => console.log("Sessions synchronisées sur Firebase"))
+  .catch(error => console.error("Erreur Firebase :", error));
       });
     });
   },
@@ -468,5 +523,5 @@ chrome.webRequest.onCompleted.addListener(
 );
 
 // Appel automatique
-chrome.runtime.onStartup.addListener(updateCo2Factors);
-chrome.runtime.onInstalled.addListener(updateCo2Factors);
+chrome.runtime.onStartup.addListener(updateEmberCo2Factor);
+chrome.runtime.onInstalled.addListener(updateEmberCo2Factor);
