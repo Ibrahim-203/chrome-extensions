@@ -3,6 +3,10 @@
 importScripts('./assets/firebase/firebase.app.compat.js')
 importScripts('./assets/firebase/firebase.database.compat.js')
 
+// Variables pour throttle
+let lastSyncTime = 0;
+const SYNC_INTERVAL = 30000; // 30 secondes (ajustable : 15s pour plus réactif, 60s pour économie)
+
 const firebaseConfig = {
   apiKey: "AIzaSyDol1NoTuwb849gjARAgmisEWK-u1Pli3g",
   authDomain: "data-collector-mvp.firebaseapp.com",
@@ -207,8 +211,10 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   if (currentUrl && startTime) {
     console.log(`🗑 Onglet fermé → arrêt du chrono en cours pour ${currentUrl}`);
     stopAndSaveTime();  // On sauvegarde le temps écoulé avant fermeture
+    
   }
 });
+chrome.runtime.onSuspend.addListener(() => syncToFirebase(sessions));
 
 // 4.Au changement d'URL dans un onglet (navigation interne)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -404,10 +410,27 @@ async function stopAndSaveTime() {
   await chrome.storage.local.set({ sessions });
 
   console.log(`⏱ Session ${today} pour ${url} → temps +${Math.round(elapsed / 1000)}s`);
+  syncToFirebase(sessions)
 
   // Reset
   startTime = null;
   currentUrl = null;
+}
+
+function syncToFirebase(sessions) {
+  const deviceId = 'device_' + chrome.runtime.id;
+  db.ref('users/' + deviceId + '/sessions').set(sessions)
+    .then(() => console.log("[Firebase] Sync OK - " + new Date().toLocaleTimeString()))
+    .catch(error => console.error("[Firebase] Sync erreur :", error));
+}
+
+// Génère un UUID v4 (simple, sans dépendance externe)
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 }
 
 
@@ -502,7 +525,7 @@ chrome.webRequest.onCompleted.addListener(
       chrome.storage.local.get('deviceInfo', (result) => {
         const info = result.deviceInfo || {};
         const co2Factor = parseFloat(info.co2FactorPerGB) || (DEFAULT_ENERGY_INTENSITY * DEFAULT_GRID_INTENSITY);
-        
+
         session.co2Grams = session.totalSize / 1_000_000_000 * co2Factor;
         session.co2Kg = (session.co2Grams / 1000).toFixed(3);
 
@@ -512,9 +535,11 @@ chrome.webRequest.onCompleted.addListener(
         session.equivCarKm = (session.co2Grams / 180).toFixed(2); // gCO₂/km voiture moyenne
 
         chrome.storage.local.set({ sessions });
-        db.ref('users/' + 'device_' + chrome.runtime.id + '/sessions').set(sessions)
-  .then(() => console.log("Sessions synchronisées sur Firebase"))
-  .catch(error => console.error("Erreur Firebase :", error));
+        const now = Date.now();
+        if (now - lastSyncTime >= SYNC_INTERVAL) {
+          lastSyncTime = now;
+          syncToFirebase(sessions);
+        }
       });
     });
   },
@@ -524,4 +549,4 @@ chrome.webRequest.onCompleted.addListener(
 
 // Appel automatique
 chrome.runtime.onStartup.addListener(updateEmberCo2Factor);
-chrome.runtime.onInstalled.addListener(updateEmberCo2Factor);
+chrome.runtime.onInstalled.addListener(()=>{updateEmberCo2Factor});
