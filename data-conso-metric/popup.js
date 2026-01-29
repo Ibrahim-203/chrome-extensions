@@ -254,3 +254,57 @@ document.getElementById('ClearData').addEventListener('click', clearLocalStorage
 window.addEventListener('unload', () => {
   if (interval) clearInterval(interval);
 });
+
+// Connexion Google via chrome.identity
+document.getElementById('loginBtn')?.addEventListener('click', () => {
+  const status = document.getElementById('userStatus');
+  status.textContent = "Connexion en cours...";
+
+  chrome.identity.getAuthToken({ interactive: true }, (token) => {
+    if (chrome.runtime.lastError) {
+      status.textContent = "Erreur : " + chrome.runtime.lastError.message;
+      return;
+    }
+
+    // Avec le token, on récupère les infos utilisateur Google
+    fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token.token }
+    })
+      .then(response => response.json())
+      .then(user => {
+        const ownerUid = user.sub; // ID unique Google (stable et unique par compte)
+        const ownerEmail = user.email;
+        const ownerName = user.name || user.given_name || 'Utilisateur';
+
+        // Stocke dans deviceInfo
+        chrome.storage.local.get('deviceInfo', (result) => {
+          const info = result.deviceInfo || {};
+          info.ownerUid = ownerUid;
+          info.ownerEmail = ownerEmail;
+          info.ownerName = ownerName;
+          info.ownerConnectedAt = Date.now();
+
+          chrome.storage.local.set({ deviceInfo: info }, () => {
+            status.innerHTML = `Connecté : <strong>${ownerName}</strong> (${ownerEmail})`;
+            // Option : rafraîchir le dashboard ou la popup
+          });
+        });
+      })
+      .catch(error => {
+        status.textContent = "Erreur connexion : " + error.message;
+      });
+  });
+});
+
+// Affichage de l’état actuel au chargement de la popup
+chrome.storage.local.get('deviceInfo', (result) => {
+  const info = result.deviceInfo || {};
+  const status = document.getElementById('userStatus');
+
+  if (info.ownerUid) {
+    status.innerHTML = `Connecté : <strong>${info.ownerName || 'Utilisateur'}</strong> (${info.ownerEmail})`;
+    document.getElementsByClassName('gsi-material-button-contents').textContent = "Changer de compte";
+  } else {
+    status.textContent = "Non connecté – Connectez-vous pour associer vos données";
+  }
+});

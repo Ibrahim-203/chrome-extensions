@@ -146,10 +146,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       if (!session) {
         session = {
-          url: url,
-          domain: new URL(url).hostname,
+          key: sessionKey,
+          url: tabUrl,
+          domain: new URL(tabUrl).hostname,
+          date: today,
           totalSize: 0,
-          timestamps: []
+          totalTime: 0,
+          xhrRequests: 0,
+          mediaRequests: 0,
+          imagesRequests: 0,
+          webSocketRequests: 0,
+          fetchRequests: 0,
+          scriptRequests: 0,
+          timestamps: [],
+          co2Grams: 0,
+          co2Kg: "0.00"
         };
         sessions.push(session);
       }
@@ -389,14 +400,22 @@ async function stopAndSaveTime() {
   if (!session) {
     // Crée une nouvelle session pour ce jour
     session = {
-      key: sessionKey,                    // Clé unique
-      url: url,
-      domain: new URL(url).hostname,
-      date: today,                        // ← Nouvelle colonne date
-      totalSize: 0,
-      totalTime: 0,
-      timestamps: []
-    };
+          key: sessionKey,
+          url: tabUrl,
+          domain: new URL(tabUrl).hostname,
+          date: today,
+          totalSize: 0,
+          totalTime: 0,
+          xhrRequests: 0,
+          mediaRequests: 0,
+          imagesRequests: 0,
+          webSocketRequests: 0,
+          fetchRequests: 0,
+          scriptRequests: 0,
+          timestamps: [],
+          co2Grams: 0,
+          co2Kg: "0.00"
+        };
     sessions.push(session);
   }
 
