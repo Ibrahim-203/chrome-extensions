@@ -66,6 +66,22 @@ margin-bottom: 10px;
   border-bottom: 1px solid #ccc;
   margin-bottom: 5px;
 }
+
+.icon {
+  transition: 
+    transform 0.25s ease,
+    opacity 0.25s ease;
+}
+
+.icon.is-changing {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.icon.success {
+  color: #22c55e; /* vert */
+}
+
 .tab i {
   flex: 1;
   text-align: center;

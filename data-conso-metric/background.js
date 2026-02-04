@@ -3,6 +3,7 @@
 importScripts('./assets/firebase/firebase.app.compat.js')
 importScripts('./assets/firebase/firebase.database.compat.js')
 
+// ============================= Firebase setup ==================================
 // Variables pour throttle
 let lastSyncTime = 0;
 const SYNC_INTERVAL = 30000; // 30 secondes (ajustable : 15s pour plus réactif, 60s pour économie)
@@ -20,7 +21,8 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
-let sessions = []; // Cache en mémoire pour rapidité
+// Cache en mémoire pour rapidité
+let sessions = []; 
 // Variables pour débounce anti-faux événements
 
 // Variables pour suivre le chrono
@@ -37,7 +39,16 @@ chrome.storage.local.get('sessions', (result) => {
 // ====================== get emission factors from ember API  ================================
 
 const EMBER_API_BASE = "https://api.ember-energy.org/v1";
-const DEFAULT_ENERGY_INTENSITY = 0.06; // kWh/GB (moyenne mondiale 2025-2026)
+// SWD = Sustainable Web Design - embodied (fabrication) + operational (usage)
+const DEFAULT_ENERGY_INTENSITY = {
+  "model": "SWD-v4",
+  "valid_from": 2025,
+  "assumptions": {
+    "network_kwh_per_gb": 0.072,
+    "datacenter_kwh_per_gb": 0.067,
+    "device_kwh_per_gb": 0.161
+  }
+}; // kWh/GB (moyenne mondiale 2025-2026)
 const API_KEY = '7c797af9-103b-3f32-acc1-941be6ad37f3'
 
 // Fonction pour récupérer le facteur carbone Ember par pays
@@ -78,6 +89,9 @@ async function fetchEmberCarbonIntensity(countryCode) {
 }
 
 async function updateEmberCo2Factor() {
+  const TOTAL_ENERGY_INTENSITY = DEFAULT_ENERGY_INTENSITY.assumptions.network_kwh_per_gb +
+    DEFAULT_ENERGY_INTENSITY.assumptions.datacenter_kwh_per_gb +
+    DEFAULT_ENERGY_INTENSITY.assumptions.device_kwh_per_gb;
   chrome.storage.local.get('deviceInfo', async (result) => {
     const info = result.deviceInfo || {};
 
@@ -89,15 +103,15 @@ async function updateEmberCo2Factor() {
 
     if (gridIntensity) {
       info.gridCarbonIntensity = gridIntensity;
-      info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
-      info.co2FactorPerGB = (DEFAULT_ENERGY_INTENSITY * gridIntensity).toFixed(2);
+      info.energyIntensity = TOTAL_ENERGY_INTENSITY;
+      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * gridIntensity).toFixed(2);
       info.co2Source = "Ember";
       info.co2UpdatedAt = Date.now();
     } else {
       // Fallback
       info.gridCarbonIntensity = 600;
-      info.energyIntensity = DEFAULT_ENERGY_INTENSITY;
-      info.co2FactorPerGB = (DEFAULT_ENERGY_INTENSITY * 600).toFixed(2);
+      info.energyIntensity = TOTAL_ENERGY_INTENSITY;
+      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * 600).toFixed(2);
       info.co2Source = "Fallback";
       info.co2UpdatedAt = Date.now();
     }
@@ -248,38 +262,6 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 // background.js – Récupération des infos appareil + géolocalisation (approche mixte : automatique au premier lancement, fallback manuel via message)
 
-// Fonction pour détecter le type d'appareil
-function detectDeviceType() {
-  const ua = navigator.userAgent.toLowerCase();
-  if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
-  if (/mobile|iphone|ipod|android|blackberry|opera mini|iemobile/i.test(ua)) return 'mobile';
-  return 'desktop';
-}
-
-// Récupère ou crée les infos appareil + demande géolocalisation automatique au premier lancement
-function initializeDeviceInfo() {
-  chrome.storage.local.get('deviceInfo', (result) => {
-    let info = result.deviceInfo || {};
-
-    // Infos de base (toujours disponibles)
-    info.deviceType = detectDeviceType();
-    info.cpuCores = navigator.hardwareConcurrency || 'Inconnu';
-    info.memoryGB = navigator.deviceMemory || 'Inconnu';
-    // info.screen = `${screen.width}x${screen.height} (ratio ${window.devicePixelRatio || 1})`;
-    info.language = navigator.language || 'Inconnu';
-    info.userAgent = navigator.userAgent;
-    info.updatedAt = Date.now();
-    chrome.storage.local.set({ deviceInfo: info });
-
-    // Demande géolocalisation automatique si pas encore fait ou refusé
-    // if (!info.geoTimestamp && !info.geoRefused) {
-    //   requestGeolocation(info);
-    // } else {
-    //   chrome.storage.local.set({ deviceInfo: info });
-    // }
-  });
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "saveGeolocation") {
     chrome.storage.local.get('deviceInfo', (result) => {
@@ -297,48 +279,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Fonction pour demander la géolocalisation
-function requestGeolocation(info) {
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      const lat = position.coords.latitude.toFixed(6);
-      const lon = position.coords.longitude.toFixed(6);
-
-      // Reverse geocoding gratuit avec OpenStreetMap Nominatim
-      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`)
-        .then(r => r.json())
-        .then(data => {
-          info.latitude = lat;
-          info.longitude = lon;
-          info.city = data.address?.city || data.address?.town || data.address?.village || 'Inconnue';
-          info.country = data.address?.country || 'Inconnu';
-          info.country_code = data.address?.country_code || 'Inconnu';
-          info.geoTimestamp = Date.now();
-          chrome.storage.local.set({ deviceInfo: info });
-          console.log("Géolocalisation automatique réussie");
-        })
-        .catch(() => {
-          info.latitude = lat;
-          info.longitude = lon;
-          info.city = 'Inconnue';
-          info.country = 'Inconnu';
-          info.geoTimestamp = Date.now();
-          chrome.storage.local.set({ deviceInfo: info });
-        });
-    },
-    (error) => {
-      console.log("Géolocalisation automatique refusée ou échouée :", error.message);
-      info.geoRefused = true;
-      info.geoTimestamp = Date.now();
-      chrome.storage.local.set({ deviceInfo: info });
-    },
-    { timeout: 15000, maximumAge: 3600000 } // 15s timeout, cache 1h
-  );
-}
-
 // Lancement automatique au premier démarrage/installation
-chrome.runtime.onInstalled.addListener(initializeDeviceInfo);
-chrome.runtime.onStartup.addListener(initializeDeviceInfo);
+chrome.runtime.onInstalled.addListener(()=>{
+  initializeDeviceInfo();
+  updateEmberCo2Factor()
+});
+chrome.runtime.onStartup.addListener(()=>{
+  initializeDeviceInfo();
+  updateEmberCo2Factor()
+});
 
 // Fallback manuel : écoute un message pour redemander (ex: depuis un bouton ailleurs)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -355,9 +304,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// ================================ Functions ========================================
 
 // Fonctions principale de gestion du chrono
-
 
 // Fonction pour démarrer le chrono sur une URL donnée
 async function startChrono(url) {
@@ -401,8 +350,8 @@ async function stopAndSaveTime() {
     // Crée une nouvelle session pour ce jour
     session = {
           key: sessionKey,
-          url: tabUrl,
-          domain: new URL(tabUrl).hostname,
+          url: url,
+          domain: new URL(url).hostname,
           date: today,
           totalSize: 0,
           totalTime: 0,
@@ -436,11 +385,83 @@ async function stopAndSaveTime() {
   currentUrl = null;
 }
 
+// Fonction pour demander la géolocalisation
+function requestGeolocation(info) {
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude.toFixed(6);
+      const lon = position.coords.longitude.toFixed(6);
+
+      // Reverse geocoding gratuit avec OpenStreetMap Nominatim
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`)
+        .then(r => r.json())
+        .then(data => {
+          info.latitude = lat;
+          info.longitude = lon;
+          info.city = data.address?.city || data.address?.town || data.address?.village || 'Inconnue';
+          info.country = data.address?.country || 'Inconnu';
+          info.country_code = data.address?.country_code || 'Inconnu';
+          info.geoTimestamp = Date.now();
+          chrome.storage.local.set({ deviceInfo: info });
+          console.log("Géolocalisation automatique réussie");
+        })
+        .catch(() => {
+          info.latitude = lat;
+          info.longitude = lon;
+          info.city = 'Inconnue';
+          info.country = 'Inconnu';
+          info.geoTimestamp = Date.now();
+          chrome.storage.local.set({ deviceInfo: info });
+        });
+    },
+    (error) => {
+      console.log("Géolocalisation automatique refusée ou échouée :", error.message);
+      info.geoRefused = true;
+      info.geoTimestamp = Date.now();
+      chrome.storage.local.set({ deviceInfo: info });
+    },
+    { timeout: 15000, maximumAge: 3600000 } // 15s timeout, cache 1h
+  );
+}
+
 function syncToFirebase(sessions) {
   const deviceId = 'device_' + chrome.runtime.id;
   db.ref('users/' + deviceId + '/sessions').set(sessions)
     .then(() => console.log("[Firebase] Sync OK - " + new Date().toLocaleTimeString()))
     .catch(error => console.error("[Firebase] Sync erreur :", error));
+}
+
+
+// Fonction pour détecter le type d'appareil
+function detectDeviceType() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
+  if (/mobile|iphone|ipod|android|blackberry|opera mini|iemobile/i.test(ua)) return 'mobile';
+  return 'desktop';
+}
+
+// Récupère ou crée les infos appareil + demande géolocalisation automatique au premier lancement
+function initializeDeviceInfo() {
+  chrome.storage.local.get('deviceInfo', (result) => {
+    let info = result.deviceInfo || {};
+
+    // Infos de base (toujours disponibles)
+    info.deviceType = detectDeviceType();
+    info.cpuCores = navigator.hardwareConcurrency || 'Inconnu';
+    info.memoryGB = navigator.deviceMemory || 'Inconnu';
+    // info.screen = `${screen.width}x${screen.height} (ratio ${window.devicePixelRatio || 1})`;
+    info.language = navigator.language || 'Inconnu';
+    info.userAgent = navigator.userAgent;
+    info.updatedAt = Date.now();
+    chrome.storage.local.set({ deviceInfo: info });
+
+    // Demande géolocalisation automatique si pas encore fait ou refusé
+    // if (!info.geoTimestamp && !info.geoRefused) {
+    //   requestGeolocation(info);
+    // } else {
+    //   chrome.storage.local.set({ deviceInfo: info });
+    // }
+  });
 }
 
 // Génère un UUID v4 (simple, sans dépendance externe)
@@ -565,7 +586,3 @@ chrome.webRequest.onCompleted.addListener(
   { urls: ["<all_urls>"] },
   ["responseHeaders"]
 );
-
-// Appel automatique
-chrome.runtime.onStartup.addListener(updateEmberCo2Factor);
-chrome.runtime.onInstalled.addListener(()=>{updateEmberCo2Factor});

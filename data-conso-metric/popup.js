@@ -4,7 +4,9 @@ const topSitesList = document.getElementById('topSitesList');
 // const refreshBtn = document.getElementById('refreshBtn');
 const exportBtn = document.getElementById('exportBtn');
 const timeList = document.getElementById('timeList');
+const copyBtn = document.getElementById('copyId');
 let interval = null;
+
 
 async function updatePopup() {
   const tabs = await chrome.tabs.query({});
@@ -44,34 +46,34 @@ async function loadData() {
     const storage = await chrome.storage.local.get('sessions');
     const sessions = storage.sessions || [];
     const today = new Date().toISOString().split('T')[0];
-    
+
 
     // 2. Vue 1 : Onglets ouverts (live)
     // - Liste les onglets actuels
     // - Pour chaque, trouve la session correspondante à son URL actuelle
     const tabs = await chrome.tabs.query({});
     tabsList.innerHTML = '';
-    if (tabs.length > 0){
+    if (tabs.length > 0) {
       tabs.forEach(tab => {
-      const sessionsKey = `${tab.url}|${today}`
-      const session = sessions.find(s => s.key === sessionsKey);  // Associe à la session
-      const sizeText = session ? formatSize(session.totalSize) : 'Non mesuré';
-      const co2Text = session ? `${session.co2Kg} kg CO₂e` : '0 kg CO₂e';
-      const timeMs = session.totalTime || 0;
-      const timeText = formatTime(timeMs);
+        const sessionsKey = `${tab.url}|${today}`
+        const session = sessions.find(s => s.key === sessionsKey);  // Associe à la session
+        const sizeText = session ? formatSize(session.totalSize) : 'Non mesuré';
+        const co2Text = session ? `${session.co2Kg} kg CO₂e` : '0 kg CO₂e';
+        const timeMs = session?.totalTime || 0;
+        const timeText = formatTime(timeMs);
 
-      const li = document.createElement('li');
-      li.innerHTML = `
+        const li = document.createElement('li');
+        li.innerHTML = `
         <strong>${tab.title.substring(0, 30)}...</strong><br>
         <small>${tab.url.substring(0, 50)}...</small><br>
         <b>${sizeText} | ${timeText} | ${co2Text}</b> (live)
       `;
-      tabsList.appendChild(li);
-    });
-    }else{
+        tabsList.appendChild(li);
+      });
+    } else {
       tabsList.innerHTML = '<li>Aucun onglet ouvert</li>';
     }
-    
+
 
     // 3. Vue 2 : Top sites historiques (agrégé par domaine)
     // - Groupe toutes les sessions par domaine
@@ -95,15 +97,15 @@ async function loadData() {
       topSitesList.appendChild(li);
     });
 
-const byDomain = {};
+    const byDomain = {};
 
-// Parcourt toutes les sessions pour agréger le temps par domaine
-sessions.forEach(session => {
-  const domain = session.domain || (session.url ? new URL(session.url).hostname : 'inconnu');
+    // Parcourt toutes les sessions pour agréger le temps par domaine
+    sessions.forEach(session => {
+      const domain = session.domain || (session.url ? new URL(session.url).hostname : 'inconnu');
 
-  // Ajoute le temps de cette session au domaine
-  byDomain[domain] = (byDomain[domain] || 0) + (session.totalTime || 0);
-});
+      // Ajoute le temps de cette session au domaine
+      byDomain[domain] = (byDomain[domain] || 0) + (session.totalTime || 0);
+    });
 
     // Tri du plus grand au plus petit
     const sortedTime = Object.entries(byDomain)
@@ -129,14 +131,6 @@ sessions.forEach(session => {
   }
 }
 
-// Formatage des tailles
-function formatSize(bytes) {
-  if (bytes === 0) return '0 Ko';
-  const k = 1024;
-  const sizes = ['o', 'Ko', 'Mo', 'Go'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
 
 // Convertit millisecondes → format lisible (ex: 1h 23min 45s)
 function formatTime(ms) {
@@ -154,11 +148,37 @@ function formatTime(ms) {
   return str.trim();
 }
 
-// Mise à jour live (toutes les 2s)
-function startLiveUpdate() {
-  loadData();
-  interval = setInterval(loadData, 2000);
-}
+// Copy chrome runtime id to clipboard
+copyBtn.addEventListener('click', () => {
+  const extensionId = chrome.runtime.id;
+  navigator.clipboard.writeText(extensionId).then(() => {
+       // déclenche l'animation de sortie
+    copyBtn.classList.add('is-changing');
+
+    setTimeout(() => {
+      // switch icône
+      copyBtn.classList.remove('fa-copy');
+      copyBtn.classList.add('fa-check', 'success');
+
+      // animation d'entrée
+      copyBtn.classList.remove('is-changing');
+    }, 200);
+
+    // retour à l’icône initiale
+    setTimeout(() => {
+      copyBtn.classList.add('is-changing');
+
+      setTimeout(() => {
+        copyBtn.classList.remove('fa-check', 'success');
+        copyBtn.classList.add('fa-copy');
+        copyBtn.classList.remove('is-changing');
+      }, 200);
+    }, 2000);
+  }).catch(err => {
+    console.error('Erreur de copie : ', err);
+  });
+
+});
 
 // Export JSON (sessions + deviceInfo)
 exportBtn.addEventListener('click', async () => {
@@ -185,11 +205,12 @@ startLiveUpdate();
 // Arrêt interval si popup ferme
 window.addEventListener('unload', () => clearInterval(interval));
 
-async function showDataStore (){
+async function showDataStore() {
   const data = await chrome.storage.local.get(null)
   console.log(data)
 }
 
+// Formatage des tailles
 function formatSize(bytes) {
   if (!bytes) return '0 Ko';
   const units = ['o', 'Ko', 'Mo', 'Go'];
@@ -215,7 +236,7 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
 // Démarrage
 startLiveUpdate();
 
-window.addEventListener('load', ()=>{
+window.addEventListener('load', () => {
   showDataStore()
 
   const tabButtons = document.querySelectorAll('.tab i');
@@ -231,21 +252,21 @@ window.addEventListener('load', ()=>{
 
       button.classList.add('active');
       document.getElementById(target).classList.add('active');
-      
+
     });
   })
 
 })
 
-async function clearLocalStorage(){
-  try{
+async function clearLocalStorage() {
+  try {
     await chrome.storage.local.clear();
     console.log("Local storage cleared.");
     loadData();
-  }catch(error){
+  } catch (error) {
     console.error("Error clearing local storage:", error);
   }
-  
+
 }
 
 document.getElementById('ClearData').addEventListener('click', clearLocalStorage);
