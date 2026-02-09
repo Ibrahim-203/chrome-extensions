@@ -43,8 +43,8 @@ async function loadData() {
 
   try {
     // 1. Récupère l'historique des sessions (global, persistant)
-    const storage = await chrome.storage.local.get('sessions');
-    const sessions = storage.sessions || [];
+    const storage = await chrome.storage.local.get('todaySessions');
+    const sessions = storage.todaySessions || [];
     const today = new Date().toISOString().split('T')[0];
 
 
