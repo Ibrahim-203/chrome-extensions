@@ -329,3 +329,15 @@ chrome.storage.local.get('deviceInfo', (result) => {
     status.textContent = "Non connecté – Connectez-vous pour associer vos données";
   }
 });
+
+function updateSession(){
+  chrome.storage.local.get('sessions', (result) => {
+    const sessions = result.sessions || [];
+    sessions.forEach(session =>{
+      session.co2Grams = session.totalSize/1_000_000_000 * 143.18;
+      session.co2Kg = (session.co2Grams / 1000).toFixed(3);
+    }) 
+    chrome.storage.local.set({sessions}, () => {      console.log("sessions updated with CO2 data")
+    }); 
+  })
+}

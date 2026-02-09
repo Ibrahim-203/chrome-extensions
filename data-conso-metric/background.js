@@ -1,4 +1,3 @@
-
 // Au tout début de background.js
 importScripts('./assets/firebase/firebase.app.compat.js')
 importScripts('./assets/firebase/firebase.database.compat.js')
@@ -22,7 +21,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // Cache en mémoire pour rapidité
-let sessions = []; 
+let sessions = [];
 // Variables pour débounce anti-faux événements
 
 // Variables pour suivre le chrono
@@ -236,7 +235,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   if (currentUrl && startTime) {
     console.log(`🗑 Onglet fermé → arrêt du chrono en cours pour ${currentUrl}`);
     stopAndSaveTime();  // On sauvegarde le temps écoulé avant fermeture
-    
+
   }
 });
 chrome.runtime.onSuspend.addListener(() => syncToFirebase(sessions));
@@ -280,13 +279,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Lancement automatique au premier démarrage/installation
-chrome.runtime.onInstalled.addListener(()=>{
+chrome.runtime.onInstalled.addListener(() => {
   initializeDeviceInfo();
-  updateEmberCo2Factor()
+  updateEmberCo2Factor();
+  resetTodaySessions();
+  updateSessionStructure()
 });
-chrome.runtime.onStartup.addListener(()=>{
+chrome.runtime.onStartup.addListener(() => {
   initializeDeviceInfo();
-  updateEmberCo2Factor()
+  updateEmberCo2Factor();
+  resetTodaySessions()
+  updateSessionStructure()
 });
 
 // Fallback manuel : écoute un message pour redemander (ex: depuis un bouton ailleurs)
@@ -333,52 +336,96 @@ async function stopAndSaveTime() {
   const elapsed = Date.now() - startTime;
   const url = currentUrl;
 
-  // Date du jour au format YYYY-MM-DD (basée sur le premier timestamp de la session)
-  const today = new Date().toISOString().split('T')[0]; // "2026-01-04"
+  // Date du jour au format YYYY-MM-DD
+  const today = new Date().toISOString().split('T')[0];
 
   // Clé unique : URL + date
   const sessionKey = `${url}|${today}`;
 
-  // Récupère les sessions
-  const result = await chrome.storage.local.get('sessions');
-  let sessions = result.sessions || [];
+  // Récupère les deux clés
+  const result = await chrome.storage.local.get(['todaySessions', 'unsentSessions']);
+  let todaySessions = result.todaySessions || [];
+  let unsentSessions = result.unsentSessions || [];
 
-  // Cherche une session avec la même clé
-  let session = sessions.find(s => s.key === sessionKey);
+  // ────────────────────────────────────────────────────────────────
+  // 1. Gestion de todaySessions (affichage popup)
+  // ────────────────────────────────────────────────────────────────
 
-  if (!session) {
-    // Crée une nouvelle session pour ce jour
-    session = {
-          key: sessionKey,
-          url: url,
-          domain: new URL(url).hostname,
-          date: today,
-          totalSize: 0,
-          totalTime: 0,
-          xhrRequests: 0,
-          mediaRequests: 0,
-          imagesRequests: 0,
-          webSocketRequests: 0,
-          fetchRequests: 0,
-          scriptRequests: 0,
-          timestamps: [],
-          co2Grams: 0,
-          co2Kg: "0.00"
-        };
-    sessions.push(session);
+  let todaySession = todaySessions.find(s => s.key === sessionKey);
+
+  if (!todaySession) {
+    todaySession = {
+      key: sessionKey,
+      url: url,
+      domain: new URL(url).hostname,
+      date: today,
+      totalSize: 0,
+      totalTime: 0,
+      xhrRequests: 0,
+      mediaRequests: 0,
+      imageRequests: 0,
+      webSocketRequests: 0,
+      fetchRequests: 0,
+      scriptRequests: 0,
+      timestamps: [],
+      co2Grams: 0,
+      co2Kg: "0.00",
+      equivTrees: "0.00",
+      equivCarKm: "0.00"
+    };
+    todaySessions.push(todaySession);
   }
 
-  // Cumule trafic et temps pour ce jour
-  session.totalTime += elapsed;
-  session.timestamps.push(Date.now());
+  // Cumule temps et timestamp
+  todaySession.totalTime += elapsed;
+  todaySession.timestamps.push(Date.now());
 
-  // (Le trafic dynamique est déjà ajouté via addTrafficDelta avec la même logique si tu l'utilises)
+  // ────────────────────────────────────────────────────────────────
+  // 2. Gestion de unsentSessions (envoi incrémental)
+  // ────────────────────────────────────────────────────────────────
 
-  // Sauvegarde
-  await chrome.storage.local.set({ sessions });
+  let unsentSession = unsentSessions.find(s => s.key === sessionKey);
 
-  console.log(`⏱ Session ${today} pour ${url} → temps +${Math.round(elapsed / 1000)}s`);
-  syncToFirebase(sessions)
+  if (!unsentSession) {
+    // On réutilise l’objet todaySession (même référence) pour éviter duplication mémoire
+    unsentSession = todaySession;
+    unsentSessions.push(unsentSession);
+  }
+
+  // Cumule temps et timestamp (déjà fait sur todaySession, donc synchronisé)
+  // Pas besoin de refaire ici
+
+  // ────────────────────────────────────────────────────────────────
+  // 3. Calcul CO₂ (une seule fois, car les deux objets sont liés)
+  // ────────────────────────────────────────────────────────────────
+
+  const deviceInfoResult = await chrome.storage.local.get('deviceInfo');
+  const info = deviceInfoResult.deviceInfo || {};
+  const co2Factor = parseFloat(info.co2FactorPerGB) || 0.02864; // fallback
+
+  const totalGB = todaySession.totalSize / 1_000_000_000;
+  todaySession.co2Grams = totalGB * co2Factor;
+  todaySession.co2Kg = (todaySession.co2Grams / 1000).toFixed(3);
+
+  todaySession.equivTrees = (todaySession.co2Grams / 22000).toFixed(2);
+  todaySession.equivCarKm = (todaySession.co2Grams / 180).toFixed(2);
+
+  // ────────────────────────────────────────────────────────────────
+  // 4. Sauvegarde des deux clés
+  // ────────────────────────────────────────────────────────────────
+
+  await chrome.storage.local.set({
+    todaySessions,
+    unsentSessions
+  });
+
+  console.log(`[Time] Session ${today} pour ${url} → +${Math.round(elapsed / 1000)}s | Aujourd’hui: ${todaySessions.length} | En attente: ${unsentSessions.length}`);
+
+  // Déclenche sync si seuil atteint
+  if (unsentSessions.length >= 5) {
+    console.log(unsentSessions.length, "sessions en attente → déclenchement sync");
+    // syncUnsentSessions();
+  }
 
   // Reset
   startTime = null;
@@ -466,10 +513,28 @@ function initializeDeviceInfo() {
 
 // Génère un UUID v4 (simple, sans dépendance externe)
 function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     const r = Math.random() * 16 | 0;
     const v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
+  });
+}
+
+// reset todaySessions à minuit
+function resetTodaySessions() {
+  const today = new Date().toISOString().split('T')[0];   // ex: "2026-01-27"
+
+  chrome.storage.local.get('todayDate', (result) => {
+    const savedDate = result.todayDate;
+
+    // Si on a changé de jour → on reset
+    if (savedDate !== today) {
+      chrome.storage.local.set({
+        todayDate: today,           // met à jour la date du jour
+        todaySessions: []           // vide les sessions du jour précédent
+      });
+      console.log(`[Reset] Nouveau jour (${today}) → todaySessions vidé`);
+    }
   });
 }
 
@@ -524,13 +589,17 @@ chrome.webRequest.onCompleted.addListener(
     else if (details.type === 'script') requestType = 'script';
     else if (details.type === 'websocket') requestType = 'webSocket';
 
-    // Cumul dans sessions
-    chrome.storage.local.get('sessions', (result) => {
-      let sessions = result.sessions || [];
-      let session = sessions.find(s => s.key === sessionKey);
+    chrome.storage.local.get(['todaySessions', 'unsentSessions'], (result) => {
+      let todaySessions = result.todaySessions || [];
+      let unsentSessions = result.unsentSessions || [];
 
-      if (!session) {
-        session = {
+      // 1. Recherche ou création de la session (pour aujourd'hui et pour l'envoi)
+      let todaySession = todaySessions.find(s => s.key === sessionKey);
+      let unsentSession = unsentSessions.find(s => s.key === sessionKey);
+
+      // Si la session n'existe pas encore pour aujourd'hui → on la crée
+      if (!todaySession) {
+        todaySession = {
           key: sessionKey,
           url: tabUrl,
           domain: new URL(tabUrl).hostname,
@@ -538,51 +607,193 @@ chrome.webRequest.onCompleted.addListener(
           totalSize: 0,
           totalTime: 0,
           xhrRequests: 0,
-          mediaRequests: 0,
-          imagesRequests: 0,
-          webSocketRequests: 0,
           fetchRequests: 0,
+          mediaRequests: 0,
+          imageRequests: 0,
           scriptRequests: 0,
+          webSocketRequests: 0,
           timestamps: [],
           co2Grams: 0,
-          co2Kg: "0.00"
+          co2Kg: "0.00",
+          equivTrees: "0.00",
+          equivCarKm: "0.00"
         };
-        sessions.push(session);
+        todaySessions.push(todaySession);
       }
 
-      switch (requestType) {
-        case 'xhr': session.xhrRequests++; break;
-        case 'fetch': session.fetchRequests++; break;
-        case 'media': session.mediaRequests++; break;
-        case 'image': session.imageRequests++; break;
-        case 'script': session.scriptRequests++; break;
-        case 'webSocket': session.webSocketRequests++; break;
+      // Même chose pour le buffer d'envoi (on ne duplique pas l'objet, on le réutilise)
+      if (!unsentSession) {
+        // On peut réutiliser l'objet todaySession (même référence) pour éviter duplication mémoire
+        unsentSession = todaySession;
+        unsentSessions.push(unsentSession);
       }
 
-      session.totalSize += size;
-      session.timestamps.push(Date.now());
+      // 2. Mise à jour des compteurs de requêtes (une seule fois pour les deux)
+      const counters = {
+        xhr: 'xhrRequests',
+        fetch: 'fetchRequests',
+        media: 'mediaRequests',
+        image: 'imageRequests',
+        script: 'scriptRequests',
+        webSocket: 'webSocketRequests'
+      };
 
-      chrome.storage.local.get('deviceInfo', (result) => {
-        const info = result.deviceInfo || {};
-        const co2Factor = parseFloat(info.co2FactorPerGB) || (DEFAULT_ENERGY_INTENSITY * DEFAULT_GRID_INTENSITY);
+      const counterKey = counters[requestType];
+      if (counterKey) {
+        todaySession[counterKey]++;
+        // Pas besoin de le faire deux fois : unsentSession pointe sur le même objet
+      }
 
-        session.co2Grams = session.totalSize / 1_000_000_000 * co2Factor;
-        session.co2Kg = (session.co2Grams / 1000).toFixed(3);
+      // 3. Mise à jour globale (taille, timestamp, CO2)
+      const now = Date.now();
+      todaySession.totalSize += size;
+      todaySession.timestamps.push(now);
 
+      // 4. Calcul CO2 (une seule fois)
+      chrome.storage.local.get('deviceInfo', (res) => {
+        const info = res.deviceInfo || {};
+        const co2Factor = parseFloat(info.co2FactorPerGB) || 0.02864; // valeur par défaut
 
-        // Option : équivalence arbres/voitures (pour affichage)
-        session.equivTrees = (session.co2Grams / 22000).toFixed(2); // gCO₂ par arbre par jour
-        session.equivCarKm = (session.co2Grams / 180).toFixed(2); // gCO₂/km voiture moyenne
+        const totalGB = todaySession.totalSize / 1_000_000_000;
+        todaySession.co2Grams = totalGB * co2Factor;
+        todaySession.co2Kg = (todaySession.co2Grams / 1000).toFixed(3);
 
-        chrome.storage.local.set({ sessions });
-        const now = Date.now();
-        if (now - lastSyncTime >= SYNC_INTERVAL) {
-          lastSyncTime = now;
-          syncToFirebase(sessions);
+        // Équivalences (calculées une fois)
+        todaySession.equivTrees = (todaySession.co2Grams / 22000).toFixed(2);
+        todaySession.equivCarKm = (todaySession.co2Grams / 180).toFixed(2);
+
+        // Sauvegarde des deux clés (todaySessions est déjà à jour)
+        chrome.storage.local.set({
+          todaySessions,
+          unsentSessions
+        });
+
+        console.log(`[Storage] Session mise à jour - Aujourd’hui : ${todaySessions.length} | En attente : ${unsentSessions.length}`);
+
+        // Déclenchement sync si seuil atteint
+        // Déclenche sync si seuil atteint
+        if (unsentSessions.length >= 5) {
+          console.log(unsentSessions.length, "sessions en attente → déclenchement sync");
+          // syncUnsentSessions();
         }
       });
     });
+
+    // Cumul dans sessions
+    // chrome.storage.local.get('sessions', (result) => {
+    //   let sessions = result.sessions || [];
+    //   let session = sessions.find(s => s.key === sessionKey);
+
+    //   if (!session) {
+    //     session = {
+    //       key: sessionKey,
+    //       url: tabUrl,
+    //       domain: new URL(tabUrl).hostname,
+    //       date: today,
+    //       totalSize: 0,
+    //       totalTime: 0,
+    //       xhrRequests: 0,
+    //       mediaRequests: 0,
+    //       imagesRequests: 0,
+    //       webSocketRequests: 0,
+    //       fetchRequests: 0,
+    //       scriptRequests: 0,
+    //       timestamps: [],
+    //       co2Grams: 0,
+    //       co2Kg: "0.00"
+    //     };
+    //     sessions.push(session);
+    //   }
+
+    //   switch (requestType) {
+    //     case 'xhr': session.xhrRequests++; break;
+    //     case 'fetch': session.fetchRequests++; break;
+    //     case 'media': session.mediaRequests++; break;
+    //     case 'image': session.imageRequests++; break;
+    //     case 'script': session.scriptRequests++; break;
+    //     case 'webSocket': session.webSocketRequests++; break;
+    //   }
+
+    //   session.totalSize += size;
+    //   session.timestamps.push(Date.now());
+
+    //   chrome.storage.local.get('deviceInfo', (result) => {
+    //     const info = result.deviceInfo || {};
+    //     const co2Factor = parseFloat(info.co2FactorPerGB) || (DEFAULT_ENERGY_INTENSITY * DEFAULT_GRID_INTENSITY);
+
+    //     session.co2Grams = session.totalSize / 1_000_000_000 * co2Factor;
+    //     session.co2Kg = (session.co2Grams / 1000).toFixed(3);
+
+
+    //     // Option : équivalence arbres/voitures (pour affichage)
+    //     session.equivTrees = (session.co2Grams / 22000).toFixed(2); // gCO₂ par arbre par jour
+    //     session.equivCarKm = (session.co2Grams / 180).toFixed(2); // gCO₂/km voiture moyenne
+
+    //     chrome.storage.local.set({ sessions });
+    //     const now = Date.now();
+    //     if (now - lastSyncTime >= SYNC_INTERVAL) {
+    //       lastSyncTime = now;
+    //       syncToFirebase(sessions);
+    //     }
+    //   });
+    // });
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders"]
 );
+
+async function syncUnsentSessions() {
+  chrome.storage.local.get('unsentSessions', async (result) => {
+    const unsent = result.unsentSessions || [];
+    if (unsent.length === 0) return;
+
+    const deviceId = chrome.runtime.id;
+
+    try {
+      console.log(`[Sync] Envoi de ${unsent.length} sessions`);
+
+      const sessionsRef = db.ref(`users/devices_${deviceId}/sessions`);
+
+      for (const session of unsent) {
+        const sessionKey = session.key;
+        if (!sessionKey) continue;
+
+        const sessionRef = db.ref(`users/devices_${deviceId}/sessions/${sessionKey}`);
+        sessionRef.set(session);
+      }
+
+      console.log("[Sync] Succès");
+
+      // Vide seulement le buffer unsent (todaySessions reste intact)
+      chrome.storage.local.set({ unsentSessions: [] });
+    } catch (err) {
+      console.error("[Sync] Échec :", err.message);
+      // Retry dans 30s
+      setTimeout(syncUnsentSessions, 30000);
+    }
+  });
+}
+
+async function updateSessionStructure() {
+  let sessions = await chrome.storage.local.get('sessions')
+  sessions = sessions.sessions || [];
+  let newSessions = {};
+
+  sessions = sessions.map(s => {
+    const newKey = hashKey(s.key);
+   newSessions[newKey] = s;
+  });
+  // Send to Firebase with new structure
+  syncToFirebase(newSessions);
+}
+
+function hashKey(originalKey) {
+  // Simple hash MD5-like (pas besoin de lib lourde)
+  let hash = 0;
+  for (let i = 0; i < originalKey.length; i++) {
+    const char = originalKey.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return 's_' + Math.abs(hash).toString(36); // préfixe + base 36
+}
