@@ -238,7 +238,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 
   }
 });
-chrome.runtime.onSuspend.addListener(() => syncToFirebase(sessions));
+chrome.runtime.onSuspend.addListener(() => syncUnsentSessions());
 
 // 4.Au changement d'URL dans un onglet (navigation interne)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -283,13 +283,13 @@ chrome.runtime.onInstalled.addListener(() => {
   initializeDeviceInfo();
   updateEmberCo2Factor();
   resetTodaySessions();
-  updateSessionStructure()
+  // updateSessionStructure()
 });
 chrome.runtime.onStartup.addListener(() => {
   initializeDeviceInfo();
   updateEmberCo2Factor();
   resetTodaySessions()
-  updateSessionStructure()
+  // updateSessionStructure()
 });
 
 // Fallback manuel : écoute un message pour redemander (ex: depuis un bouton ailleurs)
@@ -386,11 +386,6 @@ async function stopAndSaveTime() {
 
   let unsentSession = unsentSessions.find(s => s.key === sessionKey);
 
-  if (!unsentSession) {
-    // On réutilise l’objet todaySession (même référence) pour éviter duplication mémoire
-    unsentSession = todaySession;
-    unsentSessions.push(unsentSession);
-  }
 
   // Cumule temps et timestamp (déjà fait sur todaySession, donc synchronisé)
   // Pas besoin de refaire ici
@@ -410,6 +405,14 @@ async function stopAndSaveTime() {
   todaySession.equivTrees = (todaySession.co2Grams / 22000).toFixed(2);
   todaySession.equivCarKm = (todaySession.co2Grams / 180).toFixed(2);
 
+  // 5. Synchronisation vers unsentSession (seulement si elle existait déjà)
+    if (unsentSession) {
+      Object.assign(unsentSession, todaySession); // copie toutes les mises à jour récentes
+    } else {
+      // Si elle n’existait pas → on la crée et on la pousse
+      unsentSession = { ...todaySession }; // copie profonde pour éviter référence partagée ici
+      unsentSessions.push(unsentSession);
+    }
   // ────────────────────────────────────────────────────────────────
   // 4. Sauvegarde des deux clés
   // ────────────────────────────────────────────────────────────────
@@ -424,7 +427,7 @@ async function stopAndSaveTime() {
   // Déclenche sync si seuil atteint
   if (unsentSessions.length >= 5) {
     console.log(unsentSessions.length, "sessions en attente → déclenchement sync");
-    // syncUnsentSessions();
+    syncUnsentSessions();
   }
 
   // Reset
@@ -621,12 +624,6 @@ chrome.webRequest.onCompleted.addListener(
         todaySessions.push(todaySession);
       }
 
-      // Même chose pour le buffer d'envoi (on ne duplique pas l'objet, on le réutilise)
-      if (!unsentSession) {
-        // On peut réutiliser l'objet todaySession (même référence) pour éviter duplication mémoire
-        unsentSession = todaySession;
-        unsentSessions.push(unsentSession);
-      }
 
       // 2. Mise à jour des compteurs de requêtes (une seule fois pour les deux)
       const counters = {
@@ -662,6 +659,17 @@ chrome.webRequest.onCompleted.addListener(
         todaySession.equivTrees = (todaySession.co2Grams / 22000).toFixed(2);
         todaySession.equivCarKm = (todaySession.co2Grams / 180).toFixed(2);
 
+        // Même chose pour le buffer d'envoi (on ne duplique pas l'objet, on le réutilise)
+      if (!unsentSession) {
+        // On peut réutiliser l'objet todaySession (même référence) pour éviter duplication mémoire
+        unsentSession = todaySession;
+        unsentSessions.push(unsentSession);
+      } else {
+        // Si elle existe déjà dans unsentSessions → on synchronise les modifications avec todaySession
+        // (pour que les deux soient à jour)
+        Object.assign(unsentSession, todaySession);
+      }
+
         // Sauvegarde des deux clés (todaySessions est déjà à jour)
         chrome.storage.local.set({
           todaySessions,
@@ -674,7 +682,7 @@ chrome.webRequest.onCompleted.addListener(
         // Déclenche sync si seuil atteint
         if (unsentSessions.length >= 5) {
           console.log(unsentSessions.length, "sessions en attente → déclenchement sync");
-          // syncUnsentSessions();
+          syncUnsentSessions();
         }
       });
     });
@@ -752,13 +760,13 @@ async function syncUnsentSessions() {
     try {
       console.log(`[Sync] Envoi de ${unsent.length} sessions`);
 
-      const sessionsRef = db.ref(`users/devices_${deviceId}/sessions`);
+      const sessionsRef = db.ref(`users/device_${deviceId}/sessions`);
 
       for (const session of unsent) {
-        const sessionKey = session.key;
+        const sessionKey = hashKey(session.key);
         if (!sessionKey) continue;
 
-        const sessionRef = db.ref(`users/devices_${deviceId}/sessions/${sessionKey}`);
+        const sessionRef = db.ref(`users/device_${deviceId}/sessions/${sessionKey}`);
         sessionRef.set(session);
       }
 
@@ -781,7 +789,7 @@ async function updateSessionStructure() {
 
   sessions = sessions.map(s => {
     const newKey = hashKey(s.key);
-   newSessions[newKey] = s;
+    newSessions[newKey] = s;
   });
   // Send to Firebase with new structure
   syncToFirebase(newSessions);
