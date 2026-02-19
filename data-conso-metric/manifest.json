@@ -22,7 +22,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "js": [
+        "detectors/standard-video-detector.js",
+      "detectors/iframe-detector.js", 
+      "detectors/shadow-dom-detector.js",
+      "detectors/player-detector.js",
+      "detectors/main-detector.js",
+        "content.js"
+      ]
     }
   ]
 }

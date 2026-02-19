@@ -1,5 +1,100 @@
+// content.js - Version améliorée sans casser l'existant
+let detector = null;
 let currentQualityLabel = null;
-// Map resolution → label standard
+let detectionInterval = null;
+
+// Initialisation uniquement si nécessaire
+function initVideoDetection() {
+  console.log("Initialisation du détecteur vidéo (amélioré)...");
+  
+  // Vérifie si on est sur un site pertinent pour la détection vidéo
+  const hostname = window.location.hostname;
+  const videoSites = ['youtube', 'netflix', 'twitch', 'vimeo', 'dailymotion', 
+                      'voiranime', 'frenchstream', 'anime', 'stream'];
+  
+  const shouldDetect = videoSites.some(site => hostname.includes(site));
+  
+  if (!shouldDetect) {
+    console.log("Site non vidéo, détection allégée");
+    return;
+  }
+  
+  // Charge les détecteurs uniquement si nécessaire
+  loadDetectors();
+}
+
+function loadDetectors() {
+  // Crée les détecteurs seulement si nécessaire
+  if (typeof MainVideoDetector === 'undefined') {
+    console.log("Détecteurs non disponibles, utilisation du détecteur standard");
+    // Fallback sur l'ancien système
+    startLegacyDetection();
+    return;
+  }
+  
+  detector = new MainVideoDetector();
+  
+  // Détection initiale après un petit délai
+  setTimeout(detectVideoQuality, 2000);
+  
+  // Détection périodique
+  detectionInterval = setInterval(detectVideoQuality, 5000);
+}
+
+// Ancien système de détection (pour compatibilité)
+function startLegacyDetection() {
+  console.log("Utilisation du détecteur standard (legacy)");
+  setInterval(() => {
+    const videos = document.querySelectorAll('video');
+    let bestVideo = null;
+    let maxArea = 0;
+
+    videos.forEach(v => {
+      if (v.videoWidth > 0 && v.videoHeight > 0) {
+        const area = v.videoWidth * v.videoHeight;
+        if (area > maxArea) {
+          maxArea = area;
+          bestVideo = v;
+        }
+      }
+    });
+
+    if (bestVideo) {
+      const label = resolutionToLabel(bestVideo.videoWidth, bestVideo.videoHeight);
+      if (label !== currentQualityLabel) {
+        currentQualityLabel = label;
+        chrome.runtime.sendMessage({
+          action: "updateVideoQuality",
+          quality: label,
+          url: window.location.href
+        });
+      }
+    }
+  }, 5000);
+}
+
+// Nouvelle détection améliorée
+async function detectVideoQuality() {
+  if (!detector) return;
+  
+  const quality = await detector.detectAll();
+  
+  if (quality && quality.quality !== currentQualityLabel) {
+    currentQualityLabel = quality.quality;
+    
+    // MÊME MESSAGE que l'ancien système pour compatibilité
+    chrome.runtime.sendMessage({
+      action: "updateVideoQuality",
+      quality: quality.quality,
+      url: window.location.href
+      // On garde le même format pour ne pas casser background.js
+    });
+    
+    console.log(`[Video] Qualité détectée: ${quality.quality} (${quality.detector})`);
+  }
+}
+
+// Garde la fonction originale pour compatibilité
 function resolutionToLabel(width, height) {
   const res = width + 'x' + height;
   if (width >= 3840) return '4K';
@@ -11,9 +106,9 @@ function resolutionToLabel(width, height) {
   return '144p ou moins';
 }
 
-// Détection périodique de la qualité
-function detectVideoResolution() {
-  // Cherche le <video> le plus grand/actif
+// Ancienne fonction de détection (renommée mais gardée)
+function legacyDetectVideoResolution() {
+  // Ton code original
   const videos = document.querySelectorAll('video');
   console.log("finding quality video")
   let bestVideo = null;
@@ -43,6 +138,20 @@ function detectVideoResolution() {
   }
 }
 
+// Lancement conditionnel
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initVideoDetection);
+} else {
+  initVideoDetection();
+}
+
+// Nettoyage
+window.addEventListener('beforeunload', () => {
+  if (detectionInterval) {
+    clearInterval(detectionInterval);
+  }
+});
+
 function safeSendMessage(message) {
   if (chrome.runtime?.id) {  // Vérifie que le runtime est encore valide
     chrome.runtime.sendMessage(message).catch(() => {
@@ -51,8 +160,6 @@ function safeSendMessage(message) {
     });
   }
 }
-
- setInterval(detectVideoResolution, 10000);
 
 
 // ----- Geolocalisation-------------
@@ -110,6 +217,6 @@ function sendGeoToBackground(lat, lon, city, country, refused) {
 // --------End Geolocalisation ----------
 
 // === Démarrage ===
-window.addEventListener('load', () => {
-  setTimeout(detectVideoResolution, 8000);
-});
+// window.addEventListener('load', () => {
+//   setTimeout(detectVideoResolution, 8000);
+// });

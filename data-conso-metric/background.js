@@ -148,44 +148,146 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 
 // Réception trafic dynamique du content script
+// =========================== Video quality ===============================
+// chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+//   if (message.action === "updateVideoQuality") {
+//     const url = message.url;
+//     const quality = message.quality;
+//       // Date du jour au format YYYY-MM-DD
+//   const today = new Date().toISOString().split('T')[0];
+    
+//     const sessionKey = `${url}|${today}`;
+
+//     chrome.storage.local.get('sessions', (result) => {
+//       let sessions = result.sessions || [];
+//       let session = sessions.find(s => s.url === url);
+      
+
+//       if (!session) {
+//         session = {
+//           key: sessionKey,
+//           url: url,
+//           domain: new URL(tabUrl).hostname,
+//           date: today,
+//           totalSize: 0,
+//           totalTime: 0,
+//           xhrRequests: 0,
+//           mediaRequests: 0,
+//           imagesRequests: 0,
+//           webSocketRequests: 0,
+//           fetchRequests: 0,
+//           scriptRequests: 0,
+//           timestamps: [],
+//           co2Grams: 0,
+//           co2Kg: "0.00"
+//         };
+//         sessions.push(session);
+//       }
+
+
+//       session.videoQuality = quality;  // ← Nouvelle clé
+
+//       chrome.storage.local.set({ sessions })
+//         ;
+//     })
+//   }
+// });
+
+// Réception trafic dynamique du content script - TON CODE ORIGINAL
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "updateVideoQuality") {
     const url = message.url;
     const quality = message.quality;
+    // Date du jour au format YYYY-MM-DD
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Récupère l'URL du tab si disponible
+    const tabUrl = sender.tab?.url || url;
+    
+    const sessionKey = `${tabUrl}|${today}`;
 
-    chrome.storage.local.get('sessions', (result) => {
-      let sessions = result.sessions || [];
-      let session = sessions.find(s => s.url === url);
+    // chrome.storage.local.get('sessions', (result) => {
+    //   let sessions = result.sessions || [];
+    //   let session = sessions.find(s => s.url === url);
+      
+    //   if (!session) {
+    //     session = {
+    //       key: sessionKey,
+    //       url: url,
+    //       domain: new URL(tabUrl).hostname,
+    //       date: today,
+    //       totalSize: 0,
+    //       totalTime: 0,
+    //       xhrRequests: 0,
+    //       mediaRequests: 0,
+    //       imagesRequests: 0,
+    //       webSocketRequests: 0,
+    //       fetchRequests: 0,
+    //       scriptRequests: 0,
+    //       timestamps: [],
+    //       co2Grams: 0,
+    //       co2Kg: "0.00"
+    //     };
+    //     sessions.push(session);
+    //   }
 
-      if (!session) {
-        session = {
-          key: sessionKey,
-          url: tabUrl,
-          domain: new URL(tabUrl).hostname,
-          date: today,
-          totalSize: 0,
-          totalTime: 0,
-          xhrRequests: 0,
-          mediaRequests: 0,
-          imagesRequests: 0,
-          webSocketRequests: 0,
-          fetchRequests: 0,
-          scriptRequests: 0,
-          timestamps: [],
-          co2Grams: 0,
-          co2Kg: "0.00"
-        };
-        sessions.push(session);
+    //   session.videoQuality = quality;  // ← Nouvelle clé
+
+    //   chrome.storage.local.set({ sessions });
+    // });
+    
+    // === NOUVEAU : Met aussi à jour dans todaySessions si existant ===
+    chrome.storage.local.get(['todaySessions'], (result) => {
+      let todaySessions = result.todaySessions || [];
+      let todaySession = todaySessions.find(s => s.url === url || s.key === sessionKey);
+      
+      if (todaySession) {
+        todaySession.videoQuality = quality;
+        chrome.storage.local.set({ todaySessions });
+        console.log(`[Video] Qualité ${quality} ajoutée à todaySessions`);
       }
-
-
-      session.videoQuality = quality;  // ← Nouvelle clé
-
-      chrome.storage.local.set({ sessions })
-        ;
-    })
+    });
+  }
+  
+  // === NOUVEAU : Message pour les détections réseau ===
+  if (message.action === "videoQualityDetected") {
+    console.log("Qualité détectée par réseau:", message.quality);
+    // On renvoie vers le même traitement que updateVideoQuality
+    chrome.runtime.sendMessage({
+      action: "updateVideoQuality",
+      quality: message.quality,
+      url: message.url
+    });
   }
 });
+
+// === NOUVELLE FONCTION pour la détection réseau (AJOUTÉE sans rien casser) ===
+function extractQualityFromUrl(url) {
+  const patterns = [
+    { regex: /(\d{3,4})p/i, multiplier: 1 }, // 720p, 1080p
+    { regex: /(4k|2160p)/i, value: '4K' }, // 4K
+    { regex: /height[=:_](\d{3,4})/i, multiplier: 1 }, // height=720
+    { regex: /(\d{3,4})x\d{3,4}/i, multiplier: 1 }, // 1280x720
+    { regex: /(\d{3,4})[_-]?(?:p|P)/i, multiplier: 1 }
+  ];
+  
+  for (let pattern of patterns) {
+    const match = url.match(pattern.regex);
+    if (match) {
+      if (pattern.value) return pattern.value;
+      if (match[1].toLowerCase() === '4k') return '4K';
+      const height = parseInt(match[1]);
+      if (!isNaN(height)) {
+        if (height >= 2160) return '4K';
+        if (height >= 1080) return '1080p';
+        if (height >= 720) return '720p';
+        if (height >= 480) return '480p';
+        return height + 'p';
+      }
+    }
+  }
+  return null;
+}
 
 
 // =============================== Time spent ==========================================
@@ -524,8 +626,20 @@ function generateUUID() {
 }
 
 // reset todaySessions à minuit
+
+function formatDateLocal(date) {
+  const year = date.getFullYear();
+  // getMonth() is zero-based, so add 1
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
 function resetTodaySessions() {
-  const today = new Date().toISOString().split('T')[0];   // ex: "2026-01-27"
+  const date = new Date()  
+  const today = formatDateLocal(date); // ex: "2026-01-27"
+  console.log(today, "→ Vérification du reset daily");
+  
 
   chrome.storage.local.get('todayDate', (result) => {
     const savedDate = result.todayDate;
@@ -767,6 +881,8 @@ async function syncUnsentSessions() {
         if (!sessionKey) continue;
 
         const sessionRef = db.ref(`users/device_${deviceId}/sessions/${sessionKey}`);
+
+        console.log(sessionRef.toString(), "→ Envoi de la session :", session.key);
         sessionRef.set(session);
       }
 
