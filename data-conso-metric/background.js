@@ -98,19 +98,19 @@ async function updateEmberCo2Factor() {
     let countryCode = 'MDG'; // Fallback Madagascar
 
     // Appel Ember
-    const gridIntensity = await fetchEmberCarbonIntensity(countryCode);
+    const gridIntensity = await fetchEmberCarbonIntensity(countryCode) || 500; // Fallback 500 gCO₂/kWh (moyenne mondiale actuelle)
 
     if (gridIntensity) {
       info.gridCarbonIntensity = gridIntensity;
       info.energyIntensity = TOTAL_ENERGY_INTENSITY;
-      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * gridIntensity).toFixed(2);
+      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * gridIntensity).toFixed(2) // kWh/GB * gCO₂/kWh → gCO₂/GB;
       info.co2Source = "Ember";
       info.co2UpdatedAt = Date.now();
     } else {
-      // Fallback
-      info.gridCarbonIntensity = 600;
+      // Fallback ( most recent : )
+      info.gridCarbonIntensity = gridIntensity;
       info.energyIntensity = TOTAL_ENERGY_INTENSITY;
-      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * 600).toFixed(2);
+      info.co2FactorPerGB = (TOTAL_ENERGY_INTENSITY * gridIntensity).toFixed(2);
       info.co2Source = "Fallback";
       info.co2UpdatedAt = Date.now();
     }
@@ -144,54 +144,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Si lecture arrêtée → on laisse le focus normal gérer l'arrêt
   }
 });
-
-
-
-// Réception trafic dynamique du content script
-// =========================== Video quality ===============================
-// chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-//   if (message.action === "updateVideoQuality") {
-//     const url = message.url;
-//     const quality = message.quality;
-//       // Date du jour au format YYYY-MM-DD
-//   const today = new Date().toISOString().split('T')[0];
-    
-//     const sessionKey = `${url}|${today}`;
-
-//     chrome.storage.local.get('sessions', (result) => {
-//       let sessions = result.sessions || [];
-//       let session = sessions.find(s => s.url === url);
-      
-
-//       if (!session) {
-//         session = {
-//           key: sessionKey,
-//           url: url,
-//           domain: new URL(tabUrl).hostname,
-//           date: today,
-//           totalSize: 0,
-//           totalTime: 0,
-//           xhrRequests: 0,
-//           mediaRequests: 0,
-//           imagesRequests: 0,
-//           webSocketRequests: 0,
-//           fetchRequests: 0,
-//           scriptRequests: 0,
-//           timestamps: [],
-//           co2Grams: 0,
-//           co2Kg: "0.00"
-//         };
-//         sessions.push(session);
-//       }
-
-
-//       session.videoQuality = quality;  // ← Nouvelle clé
-
-//       chrome.storage.local.set({ sessions })
-//         ;
-//     })
-//   }
-// });
 
 // Réception trafic dynamique du content script - TON CODE ORIGINAL
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -498,7 +450,7 @@ async function stopAndSaveTime() {
 
   const deviceInfoResult = await chrome.storage.local.get('deviceInfo');
   const info = deviceInfoResult.deviceInfo || {};
-  const co2Factor = parseFloat(info.co2FactorPerGB) || 0.02864; // fallback
+  const co2Factor = parseFloat(info.co2FactorPerGB) || 130; // fallback (2024 : 129.63 gco2/GB (Madagascar) grid intensity from Ember )
 
   const totalGB = todaySession.totalSize / 1_000_000_000;
   todaySession.co2Grams = totalGB * co2Factor;
@@ -763,7 +715,7 @@ chrome.webRequest.onCompleted.addListener(
       // 4. Calcul CO2 (une seule fois)
       chrome.storage.local.get('deviceInfo', (res) => {
         const info = res.deviceInfo || {};
-        const co2Factor = parseFloat(info.co2FactorPerGB) || 0.02864; // valeur par défaut
+        const co2Factor = parseFloat(info.co2FactorPerGB) || 129.63; // valeur par défaut
 
         const totalGB = todaySession.totalSize / 1_000_000_000;
         todaySession.co2Grams = totalGB * co2Factor;
@@ -905,6 +857,8 @@ async function updateSessionStructure() {
 
   sessions = sessions.map(s => {
     const newKey = hashKey(s.key);
+    s.co2Grams = s.totalSize / 1_000_000_000 * 129.63; // kWh/GB * gCO₂/kWh
+    s.co2Kg = (s.co2Grams / 1000).toFixed(3);
     newSessions[newKey] = s;
   });
   // Send to Firebase with new structure

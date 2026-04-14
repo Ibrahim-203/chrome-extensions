@@ -76,9 +76,6 @@ async function loadData() {
 
 
     // 3. Vue 2 : Top sites historiques (agrégé par domaine)
-    // - Groupe toutes les sessions par domaine
-    // - Cumule les tailles
-    // - Trie du plus gros au plus petit
     const aggregated = {};
     sessions.forEach(s => {
       if (!aggregated[s.domain]) aggregated[s.domain] = { totalSize: 0, visits: 0 };
